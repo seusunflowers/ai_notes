@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 临时产物
+*.log
+*.tmp
