@@ -88,7 +88,7 @@ opencode 会把它渲染成注入给 agent 的 reference 列表——路径写�
 | 手册 | 什么时候读 |
 |---|---|
 | `<repo-root>/docs/JUPYTER_AI_OPENCODE_WINDOWS.md` | 在 Windows 上安装或排查 JupyterLab / Jupyter AI；要用 OpenCode、Claude、Codex 等 ACP Agent 作为 Jupyter 聊天后端时 |
-| `E:\LLM\ai_notes\docs\SUBLIME_TEXT_TERMMATE_OPENCODEV2_SUPPORT.md` | Sublime Text 4 的 TermMate 包接不上 OpenCode v2（模型列表为空、无输出）；或要给其他机器复刻这个修复 |
+| `<repo-root>/docs/SUBLIME_TEXT_TERMMATE_OPENCODEV2_SUPPORT.md` | Sublime Text 4 的 TermMate 包接不上 OpenCode v2（模型列表为空、无输出）；或要给其他机器复刻这个修复 |
 ```
 
 每新增一份 `docs/` 下的手册，就在这里补一行——AGENTS.md 是常驻注入的，
