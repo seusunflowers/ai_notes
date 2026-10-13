@@ -8,10 +8,18 @@
 ```
 ai_notes/
 ├── docs/        排障与安装手册，面向 agent 编写
-│   └── JUPYTER_AI_OPENCODE_WINDOWS.md
+│   ├── JUPYTER_AI_OPENCODE_WINDOWS.md
+│   └── SUBLIME_TEXT_TERMMATE_OPENCODEV2_SUPPORT.md
 └── personas/    可直接复制的配置片段（规范源）
     └── opencode_persona.py
 ```
+
+手册清单：
+
+| 手册 | 解决什么 |
+|---|---|
+| `JUPYTER_AI_OPENCODE_WINDOWS.md` | Windows 上安装 JupyterLab / Jupyter AI，并把 OpenCode、Claude、Codex 等 ACP Agent 接成聊天后端 |
+| `SUBLIME_TEXT_TERMMATE_OPENCODEV2_SUPPORT.md` | Sublime Text 4 的 TermMate 包接不上 OpenCode v2：模型列表为空、无输出。含 v1→v2 API 差异对照表、事件映射、补丁代码、不依赖 Sublime 的验证脚本，以及覆盖归档的安装与回滚步骤 |
 
 - `docs/` 里的手册遵循同一套结构：症状→根因对照表 → 环境探测命令 →
   按序修复步骤（命令可直接粘贴）→ 内联完整源码 → 不依赖服务的验证探针 →
@@ -40,7 +48,7 @@ git clone <repo-url> D:\ai_notes
   "references": {
     "ai_notes": {
       "path": "D:/ai_notes/docs",
-      "description": "跨机器的系统配置与排障手册。涉及 JupyterLab / Jupyter AI / Windows 环境时查阅"
+      "description": "跨机器的系统配置与排障手册。涉及 JupyterLab / Jupyter AI / Sublime Text TermMate / Windows 环境时查阅"
     }
   }
 }
