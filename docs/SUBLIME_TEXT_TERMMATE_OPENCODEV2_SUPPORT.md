@@ -20,13 +20,87 @@ platform-agnostic, and platform-specific differences are called out inline.
 
 ## 0. TL;DR
 
-OpenCode v2 is a ground-up rewrite (new Go binary, new package name, new HTTP
+OpenCode v2 is a ground-down rewrite (new Go binary, new package name, new HTTP
 API). TermMate's adapter was written against v1's Python-era API and fails in
 **four independent ways** at once. One of them — the startup banner — fails
 *before* the model fetch and the event stream are even started, which is why a
-single symptom ("it connects but shows nothing") actually has four root causes.
+single symptom actually has four root causes.
 
 The fix is additive: detect the API version once per connection, then branch.
+
+---
+
+## 0.1 Verified version matrix
+
+Everything in this guide was measured against exactly this stack. Version
+numbers are load-bearing here — several of the corrections in
+[§13](#13-correction-log-second-pass) came from probing a **newer** build than
+the guide was first written against, so re-measure before trusting any claim on
+a different machine.
+
+### Core stack
+
+| Component | Version | How it was identified |
+|---|---|---|
+| OS | Windows 10 (Enterprise), `10.0.19045` build 19045, 64-bit | `Win32_OperatingSystem` |
+| **Sublime Text** | **4, build 4215** | `sublime_text.exe` → `FileVersion` |
+| **ST plugin-host Python** | **3.14** (inferred — see note) | `Lib\` contains `python3`, `python33`, `python314`; build 4215 no longer ships `python38`, so 3.14 is the host |
+| **TermMate** | **0.5.8**, released 2026-09-16 | `Packages\TermMate\package-metadata.json` |
+| **OpenCode CLI** | **v2.0.27** | `opencode --version` |
+| **OpenCode npm package** | **`@opencode/cli@2.0.27`** | `%APPDATA%\npm\node_modules\@opencode\cli\package.json` |
+| OpenCode v1 (`opencode-ai`) | **not installed** | no `node_modules\opencode-ai` |
+| Node.js / npm | v22.23.3 / 12.2.0 | shim generation only — v2 is a Go binary |
+| Package Control | 4.2.8 | `Installed Packages\Package Control.sublime-package` |
+| Verification harness Python | **3.14.3** | `C:\Program Files\Python314\python.exe` |
+
+
+### TermMate's bundled agent adapters
+
+TermMate ships four adapters side by side in `genfoundry\`. **Only
+`opencode_agent.py` required patching**; the other three talk to their own
+CLIs' APIs and are untouched by the v2 rewrite.
+
+| Adapter | Backend CLI it drives | Affected by OpenCode v2? |
+|---|---|---|
+| `opencode_agent.py` | `@opencode/cli` v2 | **yes — this is the patch** |
+| `claude_agent.py` | Claude Code CLI | no |
+| `codex_agent.py` | Codex CLI | no |
+| `pi_agent.py` | Pi agent | no |
+
+> Import caveat: `genfoundry\__init__.py` pulls in all four adapters, and the
+> non-OpenCode ones **do** `import sublime`. A standalone harness must load
+> `opencode_agent.py` + `base_agent.py` directly (see §8), not via the package.
+
+### Version facts worth knowing before you patch
+
+- **`opencode2.cmd` is not a second install.** On this machine both
+  `opencode.cmd` and `opencode2.cmd` resolve to the *same*
+  `@opencode\cli\bin\opencode.exe` (v2.0.27). `opencode2` is a hand-made alias
+  shim, so there is **no v1 fallback available** — the adapter cannot silently
+  regress to v1 here.
+- **How the adapter picks the CLI** (`find_opencode_cli()`):
+  `shutil.which(<TermMate setting>)` → else `%APPDATA%\npm\opencode.cmd` on
+  Windows → else bare `opencode`. If you ever install `opencode-ai` (v1)
+  alongside v2, the `.cmd` shim wins by resolution order — pin the binary
+  explicitly via TermMate's OpenCode CLI path setting to be deterministic.
+- **Run the §8 harness on the same Python as Sublime's plugin host.** ST 4 can
+  host 3.3, 3.8 or 3.14 depending on build, and `asyncio`/`subprocess` details
+  differ enough to matter. Confirm the host from the install layout:
+  ```powershell
+  Get-ChildItem "C:\Program Files\Sublime Text\Lib" -Directory |
+    Where-Object Name -like "python*"
+  ```
+  Here that yields `python3`, `python33`, `python314` and **no** `python38`, so
+  3.14 is the host — matching the harness's 3.14.3, which is what makes the §8
+  results representative. To confirm from inside ST rather than infer, add a
+  throwaway `plugin_unloaded.py` printing `sys.version` and read it in the
+  console (`Ctrl+\``). Do this if you are verifying on a build whose `Lib`
+  layout is ambiguous.
+- TermMate's metadata declares `python_version: 3.3` (a **minimum**) while the
+  package ships `.python-version` = `3.8`. The adapter itself is pure stdlib and
+  must simply stay 3.14-safe, which it is.
+- PowerShell here blocks the `.ps1` shims (`PSSecurityException`), so invoke
+  **`opencode.cmd`**, never `opencode.ps1`.
 
 ---
 
@@ -970,16 +1044,27 @@ Honest accounting — these were deliberately **not** fixed:
 
 ## 11. Version context
 
+The concrete versions this guide was verified against are in
+[§0.1](#01-verified-version-matrix). What matters here is the *line* each
+project sits on:
+
 | Package | Line | Latest at time of writing |
 |---|---|---|
-| `@opencode/cli` | **v2** (Go binary; what `opencode.ai/install` serves) | 2.0.x, stable since 2026-09-12 |
-| `opencode-ai` | **v1** (the Python-era CLI TermMate targets) | 1.18.x, still maintained |
+| `@opencode/cli` | **v2** (Go binary; what `opencode.ai/install` serves) | 2.0.x, stable since 2026-09-12; verified at **2.0.27** |
+| `opencode-ai` | **v1** (the Python-era CLI TermMate targets) | 1.18.x, still maintained; **not installed** on the verification machine |
 | `TermMate` | 0.5.8, released 2026-09-16 | ships the v1-only adapter |
+| Sublime Text | 4 | verified at build **4215** (plugin host Python **3.14**) |
 
 v1 and v2 are **separate npm packages**, not a handoff. TermMate 0.5.8 shipped
 four days after v2.0.0 went stable without adapting, so the breakage affects
 every fresh install, not just an unlucky upgrade. Check whether upstream has
 shipped support before repeating this work.
+
+**The v2 wire format is not frozen.** Everything asserted in §5 was read from
+v2.0.27's own `/openapi.json` plus a live SSE capture. A later 2.0.x could
+rename events, change the model envelope, or make `/prompt` block as this
+guide's first revision claimed. Re-run the §3 methodology — it is cheap — and
+treat §5 as a snapshot of 2.0.27, not a specification.
 
 **Upstream status, re-checked 2026-10-13** (against `flashmodel/termmate`):
 `main:genfoundry/opencode_agent.py` is still **byte-identical** to the shipped
