@@ -29,30 +29,70 @@ ai_notes/
 
 ## 使用方式
 
-克隆到任意位置（路径自定，本机放在 `D:\ai_notes`）：
+克隆到任意位置，路径自定。下文用 `<repo-root>` 指代仓库根目录——**具体路径由每台机器自己决定，不要从本仓库推断**：
 
 ```powershell
-git clone <repo-url> D:\ai_notes
+git clone <repo-url> <repo-root>
 ```
 
 新机器上手后，让 agent 读仓库内 `docs/` 下对应手册执行。
 
 ### 让 opencode 自动发现
 
-在 `~/.config/opencode/opencode.json` 里注册本仓库的 `docs/` 目录，
-并在全局 `~/.config/opencode/AGENTS.md` 里加一行指针：
+两个文件都要改，缺一不可：
+
+1. `references` 让 opencode 把 `docs/` 挂成可访问的**目录**；
+2. 全局 `AGENTS.md` 里的指针让 agent 知道**什么时候该去读**。
+
+只做第 1 步，agent 能访问目录但不知道手册存在；只做第 2 步，agent 会去读一个它无权访问的路径。
+
+#### 1. 注册目录：`~/.config/opencode/opencode.json`
+
+把下面这段**合并进**已有的 `references` 块（该文件还有 `model`、`mcp`、`plugin` 等其他键，
+不要整份覆盖）：
 
 ```jsonc
 {
-  "$schema": "https://opencode.ai/config.json",
   "references": {
     "ai_notes": {
-      "path": "D:/ai_notes/docs",
+      "path": "<repo-root>/docs",
       "description": "跨机器的系统配置与排障手册。涉及 JupyterLab / Jupyter AI / Sublime Text TermMate / Windows 环境时查阅"
     }
   }
 }
 ```
+
+`<repo-root>` 必须换成**该机器上**仓库的实际绝对路径（例如本机为 `E:/LLM/ai_notes/docs`）。
+opencode 会把它渲染成注入给 agent 的 reference 列表——路径写错，agent 就找不到手册，
+会按「文档不存在」处理。所以这是全仓库唯一允许出现绝对路径的地方。
+
+改完重开 opencode 会话，确认注入里出现：
+
+```
+<available_references>
+  <reference>
+    <name>ai_notes</name>
+    <path>...</path>
+```
+
+#### 2. 加指针：`~/.config/opencode/AGENTS.md`
+
+在「排障手册」表格里加一行，指向仓库内的手册文件（用相对仓库的路径）：
+
+```markdown
+## 排障手册
+
+跨机器复用的系统配置与排障手册放在 `<repo-root>/docs/`。命中的时候去读对应文件，
+不要凭记忆重写命令。
+
+| 手册 | 什么时候读 |
+|---|---|
+| `<repo-root>/docs/JUPYTER_AI_OPENCODE_WINDOWS.md` | 在 Windows 上安装或排查 JupyterLab / Jupyter AI；要用 OpenCode、Claude、Codex 等 ACP Agent 作为 Jupyter 聊天后端时 |
+| `E:\LLM\ai_notes\docs\SUBLIME_TEXT_TERMMATE_OPENCODEV2_SUPPORT.md` | Sublime Text 4 的 TermMate 包接不上 OpenCode v2（模型列表为空、无输出）；或要给其他机器复刻这个修复 |
+```
+
+每新增一份 `docs/` 下的手册，就在这里补一行——AGENTS.md 是常驻注入的，
+手册不在表里就等于不存在。
 
 绝对路径只写在 opencode 的配置里，**不写进本仓库**，这样仓库可以放在任何位置。
 
