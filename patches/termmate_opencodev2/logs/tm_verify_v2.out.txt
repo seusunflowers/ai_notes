@@ -1,0 +1,61 @@
+[   0.20s] adapter module: %TEMP%\opencode\tm_verify_pkg\opencode_agent.py
+[   0.20s] cli=%APPDATA%\npm\opencode.cmd  model=deepseek/deepseek-flash  fail_model=opencode/cat-jam-free  project=%TEMP%\opencode\tm_project
+[   1.36s] PASS  connect-ok  [1.4s]
+[   1.36s] PASS  api-v2  [api_v2=True]
+[   1.36s] PASS  server-url  [http://127.0.0.1:63573]
+[   1.37s] PASS  password-captured  [password_captured=True]
+[   1.37s] api_v2=True url=http://127.0.0.1:63573 password_captured=True pid=22604
+[   3.16s] MSG models_update {'models': [{'displayName': 'LL Alpha Free', 'description': 'opencode', 'value': 'opencode/ll-alpha-free'}, {'displayName': 'Nemotron 3.5 Super VL Free', 'description': 'opencode', 'value': 'opencode/
+[   3.17s] PASS  models-update-received
+[   3.17s] PASS  model-target-present  [models=18]
+[   5.48s] MSG thread_started {'session_id': 'ses_ebb9e8adaffeVJiXaIrOoE9YNR'}
+[   5.48s] MSG turn_started {}
+[   7.61s] MSG user_message_id {'message_id': 'msg_144617699001hyIT0Fl1NzOSUp'}
+[   9.05s] MSG thinking 'The user wants me to run exactly `echo TERMMATE_V2_OK` using the shell tool, then reply with the output and'
+[   9.11s] MSG thinking ' nothing else.\n\nThe shell tool is available in the catalog... wait, actually the shell tool is listed outside the Code Mode catalog. Let me check: "'
+[   9.20s] MSG thinking 'Within `{ code }`, the only callable tools are those explicitly listed in the Code Mode catalog instructions or returned by the `search` function. Inside `{ code }`, ignore tools shown outside the'
+[   9.38s] MSG thinking ' Code Mode catalog. They are not available in the Code Mode runtime."\n\nBut shell is available as a direct tool — actually, looking at the function list, `shell` is defined as a top-level tool. The 
+[   9.70s] MSG thinking ' says the only tool for calling tools is `execute`. But `shell` appears in the functions list directly. Hmm.\n\nThe system reminder says: "Use the `execute` tool to call the tools listed below. They 
+[   9.80s] MSG thinking ' `execute`." — but that refers to the Code Mode catalog (opencode tools). The shell tool is a separate harness'
+[   9.94s] MSG thinking ' tool that can be called directly.\n\nLet me just call shell directly.\n\nActually the user says "reply with the output and nothing else" — so I should just'
+[  10.08s] MSG thinking ' reply with `TERMMATE_V2_OK`.'
+[  10.72s] MSG control_request {'request_id': 'per_144618ae60017J38EMnlwdhoK3', 'request': {'subtype': 'can_use_tool', 'tool_name': 'Bash', 'input': {'command': 'echo TERMMATE_V2_OK', 'resources': ['echo TERMMATE_V2_OK'], 'save': [
+[  10.85s] APPROVED per_144618ae60017J38EMnlwdhoK3
+[  14.55s] MSG tool_use {'name': 'command_execution', 'command': 'echo TERMMATE_V2_OK', 'output': 'TERMMATE_V2_OK\r\n', 'status': 'completed'}
+[  15.65s] MSG text 'TERMMATE_V2_OK'
+[  15.66s] MSG stop None
+[  15.66s] PASS  turn-started
+[  15.66s] PASS  user-message-id
+[  15.66s] PASS  control-request-received
+[  15.66s] PASS  subtype-can_use_tool
+[  15.66s] PASS  tool-name-bash  [Bash]
+[  15.66s] PASS  permission-type-shell  [shell]
+[  15.66s] PASS  permission-command-real
+[  15.66s] PASS  approval-reply-no-error
+[  15.66s] PASS  tool-message-received
+[  15.66s] PASS  tool-command_execution
+[  15.66s] PASS  tool-output-ok
+[  15.66s] PASS  text-contains-ok  ['TERMMATE_V2_OK']
+[  15.66s] PASS  no-errors-happy  [[]]
+[  15.66s] PASS  stop-received
+[  15.72s] PASS  interrupt-ok
+[  15.75s] PASS  rewind-ok
+[  16.58s] PASS  sessions-nonempty  [sessions=3]
+[  17.70s] PASS  recovered-turns  [turns=1]
+[  17.75s] MSG thread_started {'session_id': 'ses_ebb9e59c1ffe8KTl3Phg0lNWNx'}
+[  17.75s] MSG turn_started {}
+[  19.19s] MSG user_message_id {'message_id': 'msg_14461a67a001nMmF3P1n9QXTUo'}
+[  20.50s] MSG error 'This model is not available in your country'
+[  20.51s] PASS  failure-error-received
+[  21.02s] PASS  failure-turn-cleared
+[  21.12s] MSG turn_started {}
+[  22.16s] MSG user_message_id {'message_id': 'msg_14461b3cc001viYDCz38st31Eh'}
+[  22.78s] MSG error 'This model is not available in your country'
+[  22.78s] PASS  second-prompt-terminal
+[  23.30s] PASS  failure-turn-cleared-2
+[  34.58s] PASS  server-dead-after-disconnect  [pid=22604]
+TERMMATE_VERIFY_RESULT=PASS 29/29
+[  34.59s] 29/29 passed -> RESULT: PASS
+
+=== stderr ===
+Timed out waiting for OpenCode server process to exit; killing: pid=22604

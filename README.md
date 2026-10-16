@@ -10,6 +10,8 @@ ai_notes/
 ├── docs/        排障与安装手册，面向 agent 编写
 │   ├── JUPYTER_AI_OPENCODE_WINDOWS.md
 │   └── SUBLIME_TEXT_TERMMATE_OPENCODEV2_SUPPORT.md
+├── patches/     配套手册的可重复执行修复脚本与回滚备份
+│   └── termmate_opencodev2/
 └── personas/    可直接复制的配置片段（规范源）
     └── opencode_persona.py
 ```
