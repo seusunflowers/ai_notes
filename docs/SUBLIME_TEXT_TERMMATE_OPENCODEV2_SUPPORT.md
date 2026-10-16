@@ -20,13 +20,92 @@ platform-agnostic, and platform-specific differences are called out inline.
 
 ## 0. TL;DR
 
-OpenCode v2 is a ground-up rewrite (new Go binary, new package name, new HTTP
+OpenCode v2 is a ground-down rewrite (new Go binary, new package name, new HTTP
 API). TermMate's adapter was written against v1's Python-era API and fails in
 **four independent ways** at once. One of them — the startup banner — fails
 *before* the model fetch and the event stream are even started, which is why a
-single symptom ("it connects but shows nothing") actually has four root causes.
+single symptom actually has four root causes.
 
 The fix is additive: detect the API version once per connection, then branch.
+
+---
+
+## 0.1 Verified version matrix
+
+Everything in this guide was measured against exactly this stack. Version
+numbers are load-bearing here — several of the corrections in
+[§13](#13-correction-log-second-pass) came from probing a **newer** build than
+the guide was first written against, so re-measure before trusting any claim on
+a different machine.
+
+### Core stack
+
+| Component | Version | How it was identified |
+|---|---|---|
+| OS | Windows 10 (Enterprise), `10.0.19045` build 19045, 64-bit | `Win32_OperatingSystem` |
+| **Sublime Text** | **4, build 4215** | `sublime_text.exe` → `FileVersion` |
+| **ST plugin-host Python** | **3.14** (inferred — see note) | `Lib\` contains `python3`, `python33`, `python314`; build 4215 no longer ships `python38`, so 3.14 is the host |
+| **TermMate** | **`0.6.0`**, released 2026-10-14 | `Packages\TermMate\package-metadata.json` |
+| **OpenCode CLI** | **v2.0.27** | `opencode --version` |
+| **OpenCode npm package** | **`@opencode/cli@2.0.27`** | `%APPDATA%\npm\node_modules\@opencode\cli\package.json` |
+| OpenCode v1 (`opencode-ai`) | **not installed** | no `node_modules\opencode-ai` |
+| Node.js / npm | v22.23.3 / 12.2.0 | shim generation only — v2 is a Go binary |
+| Package Control | 4.2.8 | `Installed Packages\Package Control.sublime-package` |
+| Verification harness Python | **3.14.3** | `C:\Program Files\Python314\python.exe` |
+
+
+### TermMate's bundled agent adapters
+
+TermMate ships four adapters side by side in `genfoundry\`. **Only
+`opencode_agent.py` required patching**; the other three talk to their own
+CLIs' APIs and are untouched by the v2 rewrite.
+
+| Adapter | Backend CLI it drives | Affected by OpenCode v2? |
+|---|---|---|
+| `opencode_agent.py` | `@opencode/cli` v2 | **yes — this is the patch** |
+| `claude_agent.py` | Claude Code CLI | no |
+| `codex_agent.py` | Codex CLI | no |
+| `pi_agent.py` | Pi agent | no |
+
+> Import caveat: `genfoundry\__init__.py` pulls in all five adapters
+> (`opencode`, `claude`, `codex`, `pi`, `antigravity`). **[UPDATED for 0.6.0]** The
+> earlier rationale — that the sibling adapters `import sublime` and therefore
+> break a standalone harness — is **no longer true**: as of 0.6.0 **no** adapter
+> imports `sublime`, so the package `__init__` is importable off-ST. Loading
+> `opencode_agent.py` + `base_agent.py` directly (see §8) remains the right call
+> anyway, because it keeps the harness independent of what the other adapters
+> grow in future — but the constraint is a convention now, not a hard blocker.
+
+### Version facts worth knowing before you patch
+
+- **`opencode2.cmd` is not a second install.** On this machine both
+  `opencode.cmd` and `opencode2.cmd` resolve to the *same*
+  `@opencode\cli\bin\opencode.exe` (v2.0.27). `opencode2` is a hand-made alias
+  shim, so there is **no v1 fallback available** — the adapter cannot silently
+  regress to v1 here.
+- **How the adapter picks the CLI** (`find_opencode_cli()`):
+  `shutil.which(<TermMate setting>)` → else `%APPDATA%\npm\opencode.cmd` on
+  Windows → else bare `opencode`. If you ever install `opencode-ai` (v1)
+  alongside v2, the `.cmd` shim wins by resolution order — pin the binary
+  explicitly via TermMate's OpenCode CLI path setting to be deterministic.
+- **Run the §8 harness on the same Python as Sublime's plugin host.** ST 4 can
+  host 3.3, 3.8 or 3.14 depending on build, and `asyncio`/`subprocess` details
+  differ enough to matter. Confirm the host from the install layout:
+  ```powershell
+  Get-ChildItem "C:\Program Files\Sublime Text\Lib" -Directory |
+    Where-Object Name -like "python*"
+  ```
+  Here that yields `python3`, `python33`, `python314` and **no** `python38`, so
+  3.14 is the host — matching the harness's 3.14.3, which is what makes the §8
+  results representative. To confirm from inside ST rather than infer, add a
+  throwaway `plugin_unloaded.py` printing `sys.version` and read it in the
+  console (`Ctrl+\``). Do this if you are verifying on a build whose `Lib`
+  layout is ambiguous.
+- TermMate's metadata declares `python_version: 3.3` (a **minimum**) while the
+  package ships `.python-version` = `3.8`. The adapter itself is pure stdlib and
+  must simply stay 3.14-safe, which it is.
+- PowerShell here blocks the `.ps1` shims (`PSSecurityException`), so invoke
+  **`opencode.cmd`**, never `opencode.ps1`.
 
 ---
 
@@ -709,7 +788,10 @@ await self._http("POST", f"/session/{sid}/{verb}")
 
 Rewind: v2 uses `DELETE /api/session/{id}/revert` and exposes **no message
 selector**, so it truncates to session start. Use
-`query={"messageID": message_id}` and accept the degraded behaviour.
+`query={"messageID": message_id}` and accept the degraded behaviour. **[NOTE]**
+This is easy to half-apply: branching `interrupt()` but leaving `rewind()` on
+v1's POST **passes an error-free turn and then fails on rewind**, so verify both
+verbs explicitly (§8).
 
 ### 6.10 The synchronous session picker
 
@@ -810,8 +892,18 @@ TermMate ships as a single archive, `TermMate.sublime-package`, in
 win while the archive is present. Move the archive out of the load path:
 
 ```powershell
+# Name the backup after the version being disabled -- Package Control may have
+# moved several of these aside over time and they are not interchangeable.
 Move-Item "$env:APPDATA\Sublime Text\Installed Packages\TermMate.sublime-package" `
-          "$env:TEMP\TermMate.sublime-package.disabled"
+          "$env:TEMP\TermMate.sublime-package.disabled.060"
+```
+
+Then unpack it into place (the archive alone is not enough):
+
+```powershell
+Copy-Item "$env:TEMP\TermMate.sublime-package.disabled.060" "$env:TEMP\tm.zip"
+Expand-Archive "$env:TEMP\tm.zip" `
+              -DestinationPath "$env:APPDATA\Sublime Text\Packages\TermMate" -Force
 ```
 
 macOS/Linux equivalents:
@@ -825,7 +917,7 @@ Back up the single file before editing:
 
 ```powershell
 Copy-Item "$env:APPDATA\Sublime Text\Packages\TermMate\genfoundry\opencode_agent.py" `
-          "$env:TEMP\opencode_agent.py.orig"
+          "$env:TEMP\opencode_agent.py.orig.060"
 ```
 
 **Restart Sublime Text after moving the archive** — otherwise the already-loaded
@@ -845,8 +937,25 @@ SSE events flow.
 **The adapter has no `sublime` import** — `opencode_agent.py` and
 `base_agent.py` are pure stdlib — so it can be exercised outside Sublime. Copy
 both into a temp package dir with an empty `__init__.py`, import, and drive it
-directly. (Importing through `genfoundry/__init__.py` pulls in the other agents,
-which *do* import `sublime` — load the two files directly instead.)
+directly. (See the import caveat in §0.1: as of 0.6.0 nothing in
+`genfoundry/` imports `sublime`, so this is now belt-and-braces rather than a
+hard requirement.)
+
+A working 19/19 harness is saved at **`%TEMP%\tm_verify.py`**. It loads both
+modules by path, asserts on the full round trip listed below, auto-approves
+`control_request` messages, and prints a per-assertion PASS/FAIL table. Run it
+with the credentialed model as `TM_MODEL`:
+
+```powershell
+$env:TM_MODEL='deepseek/deepseek-flash'
+& "C:\Program Files\Python314\python.exe" "$env:TEMP\tm_verify.py"
+```
+
+Two traps it encodes, both hit while writing it:
+- `Message.content` is the **payload dict itself** — there is no `msg.content`
+  wrapper for `control_request`. Read `msg.content["request"]` directly.
+- An unknown `message_id` on `rewind()` is fine on v2 (it truncates to session
+  start), so a dummy id is a valid test.
 
 ```python
 options = AgentOptions(
@@ -902,6 +1011,24 @@ tool: {"name":"command_execution","command":"echo TERMMATE_V2_OK",
 text: 'TERMMATE_V2_OK'   errors=0   interrupt ok   rewind ok   server process dead
 RESULT: PASS
 ```
+
+**Re-verified against TermMate 0.6.0 / opencode v2.0.27 (2026-10-14): 19/19.**
+
+```
+api_v2=True  url=http://127.0.0.1:54152  password_captured=True  pid=2404
+models=129   sessions=4   recovered_turns=1
+PERMISSION: Bash permission_type=shell command='echo TERMMATE_V2_OK'
+tool: {'name':'command_execution','command':'echo TERMMATE_V2_OK',
+       'output':'TERMMATE_V2_OK\r\n','status':'completed'}
+text='TERMMATE_V2_OK'  errors=0
+failure path: 'Upstream request failed: Endpoint is unavailable.'  _turn_active cleared
+19/19 passed -> RESULT: PASS
+```
+
+Two deltas from the 0.5.8 run above, both cosmetic: `models` is **129** rather
+than 128 (the catalogue grew), and rewind needed the v2 **`DELETE`** verb —
+porting §6.9's "renamed verbs" to *only* `interrupt()` leaves `rewind()` POSTing
+and it fails with a bare `OpenCodeHTTPError`. Branch **both**.
 
 Also verify your configuration is not clobbered: with the adapter's
 `OPENCODE_CONFIG_CONTENT` set, confirm `opencode debug config` still lists the
@@ -970,34 +1097,62 @@ Honest accounting — these were deliberately **not** fixed:
 
 ## 11. Version context
 
+The concrete versions this guide was verified against are in
+[§0.1](#01-verified-version-matrix). What matters here is the *line* each
+project sits on:
+
 | Package | Line | Latest at time of writing |
 |---|---|---|
-| `@opencode/cli` | **v2** (Go binary; what `opencode.ai/install` serves) | 2.0.x, stable since 2026-09-12 |
-| `opencode-ai` | **v1** (the Python-era CLI TermMate targets) | 1.18.x, still maintained |
+| `@opencode/cli` | **v2** (Go binary; what `opencode.ai/install` serves) | 2.0.x, stable since 2026-09-12; verified at **2.0.27** |
+| `opencode-ai` | **v1** (the Python-era CLI TermMate targets) | 1.18.x, still maintained; **not installed** on the verification machine |
 | `TermMate` | 0.5.8, released 2026-09-16 | ships the v1-only adapter |
+| Sublime Text | 4 | verified at build **4215** (plugin host Python **3.14**) |
 
 v1 and v2 are **separate npm packages**, not a handoff. TermMate 0.5.8 shipped
 four days after v2.0.0 went stable without adapting, so the breakage affects
 every fresh install, not just an unlucky upgrade. Check whether upstream has
 shipped support before repeating this work.
 
-**Upstream status, re-checked 2026-10-13** (against `flashmodel/termmate`):
-`main:genfoundry/opencode_agent.py` is still **byte-identical** to the shipped
-0.5.8 archive (67 773 bytes) and contains no `_api_v2`, no `/api` prefixing and
-no `session.text.delta`. **The port is still required**, and any Package Control
-update will restore the archive and silently revert the patch. Verify with:
+**The v2 wire format is not frozen.** Everything asserted in §5 was read from
+v2.0.27's own `/openapi.json` plus a live SSE capture. A later 2.0.x could
+rename events, change the model envelope, or make `/prompt` block as this
+guide's first revision claimed. Re-run the §3 methodology — it is cheap — and
+treat §5 as a snapshot of 2.0.27, not a specification.
+
+**Upstream status, re-checked 2026-10-14** (against `flashmodel/termmate`, after
+the 0.6.0 release): `main:genfoundry/opencode_agent.py` is **still byte-identical
+to 0.5.8** — `SHA256 00F1849755503CB560361DEB3C406F4C86AD9F801448AB24F67808D8D24A2F10`,
+67 773 bytes, no `_api_v2`, no `/api` prefixing, no `session.text.delta`.
+
+**0.6.0 shipped no v2 support.** What it added is the Google Antigravity provider:
+`genfoundry/antigravity_agent.py`, a new `AntigravityMessageProcessor` in
+`chatview/chatprocessor.py` (+434 lines, **0 removed**), and plan/walkthrough
+artifact tracking in `chatview/artifact.py`. `base_agent.py` is unchanged too, so
+**every patch anchor in §6 still exists at the line numbers implied by §0.1** —
+only §6.9 needs the extra `rewind()` branch called out in §5.
+
+So the port is still required, and **any Package Control update restores the
+archive and silently reverts the patch**. That is not hypothetical: the upgrade
+from 0.5.8 to 0.6.0 on 2026-10-14 14:16 did exactly this, deleting the unpacked
+`Packages\TermMate\` directory and restoring `TermMate.sublime-package`. Symptom
+was a fresh `WinError 10061` on `GET /global/health` — *connection refused*, not
+the §1 `TimeoutError`, because the stale adapter had latched a URL and the server
+was already gone. Verify upstream with:
 
 ```powershell
 $raw = "https://raw.githubusercontent.com/flashmodel/termmate/main/genfoundry/opencode_agent.py"
-# upstream file size vs the archive's; look for "_api_v2" / "prompt_async"
+# compare upstream size/hash against the archive's; look for "_api_v2" / "prompt_async"
 ```
+
+**Long-term:** the update loop is the real problem, not any single release. Either
+disable auto-update for TermMate or upstream the §6 diff.
 
 ---
 
 ## 12. Rollback
 
 ```powershell
-Move-Item "$env:TEMP\TermMate.sublime-package.disabled" `
+Move-Item "$env:TEMP\TermMate.sublime-package.disabled.060" `
           "$env:APPDATA\Sublime Text\Installed Packages\TermMate.sublime-package"
 Remove-Item "$env:APPDATA\Sublime Text\Packages\TermMate" -Recurse -Force
 ```
@@ -1006,7 +1161,7 @@ Restart Sublime Text. Or, if the unpacked directory is already in place, just
 restore the one file:
 
 ```powershell
-Copy-Item "$env:TEMP\opencode_agent.py.orig" `
+Copy-Item "$env:TEMP\opencode_agent.py.orig.060" `
           "$env:APPDATA\Sublime Text\Packages\TermMate\genfoundry\opencode_agent.py" -Force
 ```
 
