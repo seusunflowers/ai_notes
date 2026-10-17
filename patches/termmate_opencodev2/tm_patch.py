@@ -4,7 +4,16 @@ Idempotent: each edit replaces `old` with `new`; if `old` is absent but `new`
 is already present the edit is reported as SKIP.  Writes nothing unless every
 edit is either applied or already present.
 
-Edit 6.1 (banner regexes) was already applied manually; not included here.
+Self-contained: the input may be the pristine upstream file straight out of
+the unpacked archive (manual section 7).  Edit `6.1-banner-regexes` is
+included, so the old "apply section 6.1 by hand first" prerequisite is gone;
+running against a file that already has 6.1 applied is a safe SKIP.
+
+Rewind (`rewind-v2`) targets the opencode 2.0.32 wire format: the staged
+`POST .../revert/stage` + `POST .../revert/commit` pair, which preserves
+message granularity.  On 2.0.32 `DELETE /revert` is a silent no-op, so it is
+used only as a 404/405 fallback for older v2 builds (which truncate to the
+start of the session instead).
 """
 import os
 import shutil
@@ -26,6 +35,19 @@ BACKUP = os.environ.get("TM_BACKUP") or os.path.join(
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 EDITS = [
+    ("6.1-banner-regexes", r'''_SERVER_URL_RE = re.compile(
+    r"opencode server listening on\s+(https?://[^\s]+)", re.IGNORECASE
+)''', r'''# v1 announces itself with an "opencode" prefix; v2 omits it.
+_SERVER_URL_RE = re.compile(
+    r"(?:opencode\s+)?server listening on\s+(https?://[^\s]+)", re.IGNORECASE
+)
+_SERVER_PASSWORD_RE = re.compile(r"server password\s+(\S+)", re.IGNORECASE)
+_V1_BANNER_RE = re.compile(r"\s*opencode\s+server listening on\b", re.IGNORECASE)
+
+
+def _is_v2_banner(line: str) -> bool:
+    return not _V1_BANNER_RE.match(line)'''),
+
     ("6.6-tool-names", r'''_TOOL_NAMES = {
     "bash": "Bash",
     "edit": "Edit",''', r'''_TOOL_NAMES = {
@@ -515,14 +537,33 @@ EDITS = [
         self._terminal_tools.clear()
         self._diff_cache.clear()
         return self._session_id''', r'''        if self._api_v2:
-            # v2 exposes no message selector for revert; the server truncates
-            # to the start of the session.  The query is sent for forward
-            # compatibility but ignored today.
-            await self._http(
-                "DELETE",
-                f"/session/{quote(self._session_id, safe='')}/revert",
-                query={"messageID": message_id},
-            )
+            # 2.0.32 keeps message granularity through the staged pair.  The
+            # older DELETE form is not a message selector any more: on 2.0.32
+            # it returns 204 and changes nothing, and where it does work it
+            # truncates to the start of the session.  Try the staged route
+            # first and fall back only when the server does not have it.
+            session_path = f"/session/{quote(self._session_id, safe='')}"
+            try:
+                await self._http(
+                    "POST",
+                    f"{session_path}/revert/stage",
+                    body={"messageID": message_id},
+                )
+            except OpenCodeHTTPError as error:
+                if error.status not in (404, 405):
+                    raise
+                LOG.debug(
+                    "OpenCode revert/stage unavailable (%s); "
+                    "falling back to DELETE /revert",
+                    error.status,
+                )
+                await self._http(
+                    "DELETE",
+                    f"{session_path}/revert",
+                    query={"messageID": message_id},
+                )
+            else:
+                await self._http("POST", f"{session_path}/revert/commit")
         else:
             await self._http(
                 "POST",
@@ -532,13 +573,13 @@ EDITS = [
         self._turn_active = False
         self._turn_plan_mode = False
         self._awaiting_user_message_id = False
-        self._pending_tools.clear()
         self._turn_done.set()
         self._text_cache.clear()
         self._part_types.clear()
         self._message_roles.clear()
         self._user_message_ids.clear()
         self._terminal_tools.clear()
+        self._pending_tools.clear()
         self._diff_cache.clear()
         return self._session_id'''),
 

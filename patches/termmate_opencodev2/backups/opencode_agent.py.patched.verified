@@ -1680,14 +1680,33 @@ class OpenCodeAgent(BaseAgent):
         if not self._is_connected or not self._session_id:
             raise RuntimeError("Client is not connected or has no active session")
         if self._api_v2:
-            # v2 exposes no message selector for revert; the server truncates
-            # to the start of the session.  The query is sent for forward
-            # compatibility but ignored today.
-            await self._http(
-                "DELETE",
-                f"/session/{quote(self._session_id, safe='')}/revert",
-                query={"messageID": message_id},
-            )
+            # 2.0.32 keeps message granularity through the staged pair.  The
+            # older DELETE form is not a message selector any more: on 2.0.32
+            # it returns 204 and changes nothing, and where it does work it
+            # truncates to the start of the session.  Try the staged route
+            # first and fall back only when the server does not have it.
+            session_path = f"/session/{quote(self._session_id, safe='')}"
+            try:
+                await self._http(
+                    "POST",
+                    f"{session_path}/revert/stage",
+                    body={"messageID": message_id},
+                )
+            except OpenCodeHTTPError as error:
+                if error.status not in (404, 405):
+                    raise
+                LOG.debug(
+                    "OpenCode revert/stage unavailable (%s); "
+                    "falling back to DELETE /revert",
+                    error.status,
+                )
+                await self._http(
+                    "DELETE",
+                    f"{session_path}/revert",
+                    query={"messageID": message_id},
+                )
+            else:
+                await self._http("POST", f"{session_path}/revert/commit")
         else:
             await self._http(
                 "POST",
@@ -1697,13 +1716,13 @@ class OpenCodeAgent(BaseAgent):
         self._turn_active = False
         self._turn_plan_mode = False
         self._awaiting_user_message_id = False
-        self._pending_tools.clear()
         self._turn_done.set()
         self._text_cache.clear()
         self._part_types.clear()
         self._message_roles.clear()
         self._user_message_ids.clear()
         self._terminal_tools.clear()
+        self._pending_tools.clear()
         self._diff_cache.clear()
         return self._session_id
 

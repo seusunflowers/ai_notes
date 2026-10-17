@@ -1,61 +1,56 @@
-[   0.20s] adapter module: %TEMP%\opencode\tm_verify_pkg\opencode_agent.py
-[   0.20s] cli=%APPDATA%\npm\opencode.cmd  model=deepseek/deepseek-flash  fail_model=opencode/cat-jam-free  project=%TEMP%\opencode\tm_project
-[   1.36s] PASS  connect-ok  [1.4s]
-[   1.36s] PASS  api-v2  [api_v2=True]
-[   1.36s] PASS  server-url  [http://127.0.0.1:63573]
-[   1.37s] PASS  password-captured  [password_captured=True]
-[   1.37s] api_v2=True url=http://127.0.0.1:63573 password_captured=True pid=22604
-[   3.16s] MSG models_update {'models': [{'displayName': 'LL Alpha Free', 'description': 'opencode', 'value': 'opencode/ll-alpha-free'}, {'displayName': 'Nemotron 3.5 Super VL Free', 'description': 'opencode', 'value': 'opencode/
-[   3.17s] PASS  models-update-received
-[   3.17s] PASS  model-target-present  [models=18]
-[   5.48s] MSG thread_started {'session_id': 'ses_ebb9e8adaffeVJiXaIrOoE9YNR'}
-[   5.48s] MSG turn_started {}
-[   7.61s] MSG user_message_id {'message_id': 'msg_144617699001hyIT0Fl1NzOSUp'}
-[   9.05s] MSG thinking 'The user wants me to run exactly `echo TERMMATE_V2_OK` using the shell tool, then reply with the output and'
-[   9.11s] MSG thinking ' nothing else.\n\nThe shell tool is available in the catalog... wait, actually the shell tool is listed outside the Code Mode catalog. Let me check: "'
-[   9.20s] MSG thinking 'Within `{ code }`, the only callable tools are those explicitly listed in the Code Mode catalog instructions or returned by the `search` function. Inside `{ code }`, ignore tools shown outside the'
-[   9.38s] MSG thinking ' Code Mode catalog. They are not available in the Code Mode runtime."\n\nBut shell is available as a direct tool — actually, looking at the function list, `shell` is defined as a top-level tool. The 
-[   9.70s] MSG thinking ' says the only tool for calling tools is `execute`. But `shell` appears in the functions list directly. Hmm.\n\nThe system reminder says: "Use the `execute` tool to call the tools listed below. They 
-[   9.80s] MSG thinking ' `execute`." — but that refers to the Code Mode catalog (opencode tools). The shell tool is a separate harness'
-[   9.94s] MSG thinking ' tool that can be called directly.\n\nLet me just call shell directly.\n\nActually the user says "reply with the output and nothing else" — so I should just'
-[  10.08s] MSG thinking ' reply with `TERMMATE_V2_OK`.'
-[  10.72s] MSG control_request {'request_id': 'per_144618ae60017J38EMnlwdhoK3', 'request': {'subtype': 'can_use_tool', 'tool_name': 'Bash', 'input': {'command': 'echo TERMMATE_V2_OK', 'resources': ['echo TERMMATE_V2_OK'], 'save': [
-[  10.85s] APPROVED per_144618ae60017J38EMnlwdhoK3
-[  14.55s] MSG tool_use {'name': 'command_execution', 'command': 'echo TERMMATE_V2_OK', 'output': 'TERMMATE_V2_OK\r\n', 'status': 'completed'}
-[  15.65s] MSG text 'TERMMATE_V2_OK'
-[  15.66s] MSG stop None
-[  15.66s] PASS  turn-started
-[  15.66s] PASS  user-message-id
-[  15.66s] PASS  control-request-received
-[  15.66s] PASS  subtype-can_use_tool
-[  15.66s] PASS  tool-name-bash  [Bash]
-[  15.66s] PASS  permission-type-shell  [shell]
-[  15.66s] PASS  permission-command-real
-[  15.66s] PASS  approval-reply-no-error
-[  15.66s] PASS  tool-message-received
-[  15.66s] PASS  tool-command_execution
-[  15.66s] PASS  tool-output-ok
-[  15.66s] PASS  text-contains-ok  ['TERMMATE_V2_OK']
-[  15.66s] PASS  no-errors-happy  [[]]
-[  15.66s] PASS  stop-received
-[  15.72s] PASS  interrupt-ok
-[  15.75s] PASS  rewind-ok
-[  16.58s] PASS  sessions-nonempty  [sessions=3]
-[  17.70s] PASS  recovered-turns  [turns=1]
-[  17.75s] MSG thread_started {'session_id': 'ses_ebb9e59c1ffe8KTl3Phg0lNWNx'}
-[  17.75s] MSG turn_started {}
-[  19.19s] MSG user_message_id {'message_id': 'msg_14461a67a001nMmF3P1n9QXTUo'}
-[  20.50s] MSG error 'This model is not available in your country'
-[  20.51s] PASS  failure-error-received
-[  21.02s] PASS  failure-turn-cleared
-[  21.12s] MSG turn_started {}
-[  22.16s] MSG user_message_id {'message_id': 'msg_14461b3cc001viYDCz38st31Eh'}
-[  22.78s] MSG error 'This model is not available in your country'
-[  22.78s] PASS  second-prompt-terminal
-[  23.30s] PASS  failure-turn-cleared-2
-[  34.58s] PASS  server-dead-after-disconnect  [pid=22604]
-TERMMATE_VERIFY_RESULT=PASS 29/29
-[  34.59s] 29/29 passed -> RESULT: PASS
-
-=== stderr ===
-Timed out waiting for OpenCode server process to exit; killing: pid=22604
+[   0.03s] adapter module: %TEMP%\opencode\tm_verify_pkg\opencode_agent.py
+[   0.04s] cli=%OPENCODE_CLI%  model=deepseek/deepseek-flash  fail_model=ollama/llama3:8b  project=%TEMP%\opencode\tm_project
+[   0.32s] PASS  connect-ok  [0.3s]
+[   0.32s] PASS  api-v2  [api_v2=True]
+[   0.32s] PASS  server-url  [http://127.0.0.1:55283]
+[   0.32s] PASS  password-captured  [password_captured=True]
+[   0.32s] api_v2=True url=http://127.0.0.1:55283 password_captured=True pid=26496
+[   0.67s] MSG models_update {'models': [{'displayName': 'Nemotron 3.5 Super VL Free', 'description': 'opencode', 'value': 'opencode/nemotron-3.5-super-vl-free'}, {'displayName': 'Gemini 4 Argon', 'description': 'google', 'value'
+[   0.67s] PASS  models-update-received
+[   0.67s] PASS  model-target-present  [models=127]
+[   0.69s] MSG thread_started {'session_id': 'ses_eb5e67f51ffemkwb7lPalRgnzm'}
+[   0.69s] MSG turn_started {}
+[   0.75s] MSG user_message_id {'message_id': 'msg_14a1980c00018betj3G5hDJxjl'}
+[   1.76s] MSG thinking 'The'
+[   1.87s] MSG thinking " user wants me to run exactly that command via shell tool. I can call shell directly (it's in"
+[   1.94s] MSG thinking ' my tool list). Then reply with output and nothing else.'
+[   2.03s] MSG control_request {'request_id': 'per_14a1985f800117uv9gyMLyXaFz', 'request': {'subtype': 'can_use_tool', 'tool_name': 'Bash', 'input': {'command': 'echo TERMMATE_V2_OK', 'resources': ['echo TERMMATE_V2_OK'], 'save': [
+[   2.04s] APPROVED per_14a1985f800117uv9gyMLyXaFz
+[   2.19s] MSG tool_use {'name': 'command_execution', 'command': 'echo TERMMATE_V2_OK', 'output': 'TERMMATE_V2_OK\r\n', 'status': 'completed'}
+[   2.89s] MSG text 'TERMMATE_V2_OK'
+[   2.89s] MSG stop None
+[   2.89s] PASS  turn-started
+[   2.89s] PASS  user-message-id
+[   2.89s] PASS  control-request-received
+[   2.89s] PASS  subtype-can_use_tool
+[   2.89s] PASS  tool-name-bash  [Bash]
+[   2.89s] PASS  permission-type-shell  [shell]
+[   2.89s] PASS  permission-command-real
+[   2.89s] PASS  approval-reply-no-error
+[   2.89s] PASS  tool-message-received
+[   2.89s] PASS  tool-command_execution
+[   2.89s] PASS  tool-output-ok
+[   2.89s] PASS  text-contains-ok  ['TERMMATE_V2_OK']
+[   2.89s] PASS  no-errors-happy  [[]]
+[   2.89s] PASS  stop-received
+[   2.90s] PASS  interrupt-ok
+[   2.94s] PASS  rewind-ok
+[   2.94s] PASS  rewind-had-messages  [before=6]
+[   2.94s] PASS  rewind-drops-target  [target=msg_14a1980c00018betj3G5hDJxjl]
+[   2.94s] PASS  rewind-trims-exactly  [6->2 expect=2]
+[   3.18s] PASS  sessions-nonempty  [sessions=11]
+[   3.65s] PASS  recovered-turns  [turns=2]
+[   3.66s] MSG thread_started {'session_id': 'ses_eb5e673b2ffer2V4lfhvTTvRSD'}
+[   3.66s] MSG turn_started {}
+[   3.69s] MSG user_message_id {'message_id': 'msg_14a198c59001d9dp9pXT7u13F7'}
+[   3.70s] MSG error 'registry.ollama.ai/library/llama3:8b does not support tools'
+[   3.70s] PASS  failure-error-received
+[   4.21s] PASS  failure-turn-cleared
+[   4.22s] MSG turn_started {}
+[   4.26s] MSG user_message_id {'message_id': 'msg_14a198e9c001D1UAUEtBL0cxTz'}
+[   4.27s] MSG error 'registry.ollama.ai/library/llama3:8b does not support tools'
+[   4.27s] PASS  second-prompt-terminal
+[   4.78s] PASS  failure-turn-cleared-2
+[   6.57s] PASS  server-dead-after-disconnect  [pid=26496]
+TERMMATE_VERIFY_RESULT=PASS 32/32
+[   6.57s] 32/32 passed -> RESULT: PASS

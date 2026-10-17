@@ -5,7 +5,9 @@ A reproducible guide for AI agents and humans who need to make the
 v2 CLI. Written from a real Windows repair; the analysis and the patch are
 platform-agnostic, and platform-specific differences are called out inline.
 
-**Status:** verified working end-to-end against `opencode v2.0.27`.
+**Status:** verified working end-to-end against `opencode v2.0.27` **and
+v2.0.32** (see [§14](#14-third-pass-opencode-v2032--termmate-061), which also
+carries the small v2.0.32 deltas to §6.6 and §6.9).
 **Scope:** `genfoundry/opencode_agent.py` only. No other TermMate file needed edits.
 
 > **Revision note (2nd pass, opencode v2.0.27).** The first version of this guide
@@ -15,6 +17,15 @@ platform-agnostic, and platform-specific differences are called out inline.
 > work (§9.1). It also omitted working code for the v2 permission prompt and the
 > v2 message envelope. Every correction is marked **[CORRECTED]** in place and
 > summarised in [§13](#13-correction-log-second-pass).
+>
+> **Revision note (3rd pass, opencode v2.0.32 / TermMate 0.6.1).** The whole port
+> was re-applied and re-measured on a machine where Package Control had just
+> clobbered it (0.6.0 → 0.6.1 restored the `.sublime-package`). Everything in §6
+> still applies, and `genfoundry/opencode_agent.py` is **still byte-identical to
+> 0.5.8** (`SHA256 00F1849…A2F10`), so all patch anchors hold. Two things did
+> change on 2.0.32: `rewind()` must use the **staged** revert pair, not
+> `DELETE /revert`, and the failed-tool terminal event is `session.tool.failed`,
+> not `session.tool.error`. Both are marked **[v2.0.32]** inline.
 
 ---
 
@@ -27,6 +38,10 @@ API). TermMate's adapter was written against v1's Python-era API and fails in
 single symptom actually has four root causes.
 
 The fix is additive: detect the API version once per connection, then branch.
+
+**[§0.2](#02-reproduce-in-one-pass) is the whole procedure in four commands.**
+§1–§5 are the derivation, §6 is the reference form of the patch, §7–§8 the
+install and verification detail, §14 the 2.0.32 pass.
 
 ---
 
@@ -52,6 +67,14 @@ a different machine.
 | Node.js / npm | v22.23.3 / 12.2.0 | shim generation only — v2 is a Go binary |
 | Package Control | 4.2.8 | `Installed Packages\Package Control.sublime-package` |
 | Verification harness Python | **3.14.3** | `C:\Program Files\Python314\python.exe` |
+
+
+> **[v2.0.32]** Second machine, same guide, re-measured 2026-10-17: Sublime Text
+> **4 build 4215** (plugin host 3.14), **TermMate 0.6.1** (released 2026-10-16),
+> **`@opencode/cli@2.0.32`**, Node at `C:\nvm4w\nodejs\`, harness Python 3.14.3.
+> TermMate 0.6.1's `opencode_agent.py` is byte-identical to 0.5.8/0.6.0 (same
+> hash), so the §6 patch applied with **zero fuzz** and the only 2.0.32 deltas
+> are the two in [§14](#14-third-pass-opencode-v2032--termmate-061).
 
 
 ### TermMate's bundled agent adapters
@@ -106,6 +129,51 @@ CLIs' APIs and are untouched by the v2 rewrite.
   must simply stay 3.14-safe, which it is.
 - PowerShell here blocks the `.ps1` shims (`PSSecurityException`), so invoke
   **`opencode.cmd`**, never `opencode.ps1`.
+
+---
+
+## 0.2 Reproduce in one pass
+
+The §6 excerpts are the **reference** form of the fix — you do not type them. The
+maintained tooling is committed next to this guide at
+[`patches/termmate_opencodev2/`](../patches/termmate_opencodev2/README.md):
+`tm_patch.py` (29 idempotent anchor edits; §6.1 and the rewind D1 included),
+`tm_verify_v2.py` (32 assertions), `check_syntax.py`, plus `backups/` and `logs/`
+listed with their sizes and SHA-256.
+
+```powershell
+# 1. disable the archive and unpack it (rationale, macOS/Linux: §7)
+Move-Item "$env:APPDATA\Sublime Text\Installed Packages\TermMate.sublime-package" `
+          "$env:TEMP\TermMate.sublime-package.disabled.061"   # name it after the version you disabled
+Copy-Item "$env:TEMP\TermMate.sublime-package.disabled.061" "$env:TEMP\tm.zip"
+Expand-Archive "$env:TEMP\tm.zip" `
+  -DestinationPath "$env:APPDATA\Sublime Text\Packages\TermMate" -Force
+
+# 2. patch — idempotent; prints SKIP/OK per edit and writes nothing unless every edit matches
+python D:\ai_notes\patches\termmate_opencodev2\tm_patch.py
+
+# 3. syntax check, then RESTART Sublime Text (the plugin host loads the module once)
+python D:\ai_notes\patches\termmate_opencodev2\check_syntax.py `
+       "$env:APPDATA\Sublime Text\Packages\TermMate\genfoundry\opencode_agent.py"
+
+# 4. verify against a live server (needs an opencode CLI and a credentialed model)
+$env:TM_CLI='C:\nvm4w\nodejs\node_modules\@opencode\cli\bin\opencode.exe'
+$env:TM_MODEL='deepseek/deepseek-flash'; $env:TM_FAIL_MODEL='ollama/llama3:8b'
+python D:\ai_notes\patches\termmate_opencodev2\tm_verify_v2.py    # EXPECT: 32/32 PASS
+```
+
+Every path inside the scripts is derived from `%APPDATA%` / `%TEMP%` and can be
+overridden (`TM_TARGET`, `TM_BACKUP`, `TM_PKG`, `TM_CLI`, `TM_MODEL`,
+`TM_FAIL_MODEL`), so steps 1–3 are machine-independent; only step 4's CLI path
+and model names are this machine's. Run `python` on the same interpreter line as
+Sublime's plugin host (§0.1): here `python` resolves to
+`C:\Program Files\Python314\python.exe` (3.14.3), which is the 3.14 host.
+
+**Expected end state:** `genfoundry\opencode_agent.py` byte-identical to
+`patches/termmate_opencodev2/backups/opencode_agent.py.patched.verified` — `SHA256
+D5425D817BDED7C52BC638B68945234DE0A2B9DC92788712A4827DB1E428BBFF`, 84 351 bytes
+(LF). Check the pristine hash first (it must still be `00F1849…A2F10`); if it is
+not, upstream changed and §6/§3 need re-reading before patching.
 
 ---
 
@@ -242,7 +310,7 @@ Do not guess the v2 API from memory. In order of value:
 
    | Source | Result |
    |---|---|
-   | `GET /api/provider` | `{data: [], location}` — a **bare list, always empty**, even with a valid credential. Useless for provider discovery. |
+   | `GET /api/provider` | `{data: [], location}` — a **bare list, always empty**, even with a valid credential. Useless for provider discovery. **[v2.0.32]** No longer empty: it now returns real entries (`{id, integrationID, name, activation, package, settings}` — 5 providers here). Still *not* used for model discovery; `/api/model` remains the source of truth (§6.5). |
    | `GET /api/model` | 128 entries, `enabled: true`, across `openai`/`google`/`opencode`/`ollama`/`deepseek` |
    | `GET /api/credential` | lists which integrations are actually credentialed |
 
@@ -289,15 +357,15 @@ Derived from `/openapi.json` and live SSE capture.
 |---|---|---|
 | Health / version | `GET /global/health` | `GET /api/info` → `{version, pid, urls, paths, capabilities}` |
 | Models | `GET /provider` → `{connected, all:[{id,name,models}]}` | `GET /api/model` → `{location, data:[Model.Info]}` |
-| Providers | same route as models | `GET /api/provider` → **`{data: []}`** — a bare list, empty even with credentials. Do not use it for discovery. |
+| Providers | same route as models | `GET /api/provider` → **`{data: []}`** — a bare list, empty even with credentials. Do not use it for discovery. **[v2.0.32]** Populated now, but still not a discovery source; `/api/model` is. |
 | Credentials | — | `GET /api/credential` → plaintext keys; use only to find a working provider |
 | Sessions | `GET /session` | `GET /api/session` |
 | Create session | `POST /session` | `POST /api/session` |
 | Send turn | `POST /session/{id}/prompt_async` body `{parts, agent, model, system, tools}` | `POST /api/session/{id}/prompt` body **`{text}`** — **no `system` field**; `prompt_async` is 404. **[CORRECTED]** It does **not** block for the turn on v2.0.27 (measured: returns in **0.11s** carrying the user message). Earlier revisions claimed it blocks; SSE carries the turn either way. |
 | Select model | part of the prompt body | `POST /api/session/{id}/model` body `{"model": {id, providerID, variant?}}` → 204. `Model.Ref` uses **`id`**, not `modelID` — see below |
 | Select agent | `agent` field in prompt body | `POST /api/session/{id}/agent` body `{"agent": "<name>"}`. Ids are lowercase (`build`, `plan`); `/api/agent` lists them capitalised (`Build`, `Plan`) |
-| Interrupt | `POST /session/{id}/abort` (404 on v2) | `POST /api/session/{id}/interrupt` → `{"interrupted": false}` |
-| Revert | `POST /session/{id}/revert` (404 on v2) | `DELETE /api/session/{id}/revert` — **no message selector**, truncates to session start |
+| Interrupt | `POST /session/{id}/abort` (404 on v2) | `POST /api/session/{id}/interrupt` → `{"interrupted": false}`; the turn then ends with `session.execution.interrupted`, which the patch treats as a turn end **[v2.0.32]** |
+| Revert | `POST /session/{id}/revert` (404 on v2) | **[v2.0.32]** `POST /api/session/{id}/revert/stage` body `{"messageID"}` → `{data:{messageID,files}}` then `POST /api/session/{id}/revert/commit` → 204. This **restores message granularity**. `DELETE /api/session/{id}/revert` still exists but now means *"clear staged revert"* and reverts nothing (measured: message count unchanged, 7 → 7). Unknown `messageID` on stage → 404 `MessageNotFoundError`. |
 | Permissions | `POST /session/{id}/permissions/{pid}` | `POST /api/session/{id}/permission/{requestID}/reply` body `{"decision":"once"\|"always"\|"reject"}` → 204. Note the **singular** `permission` segment and the required `{sessionID}` prefix |
 | Events | `GET /event` | `GET /api/event` |
 | Session diff | `session.diff` event | `GET /api/session/{id}/diff` — returns `{data: []}` in practice; see §9.1 |
@@ -365,10 +433,12 @@ Plus bare `: heartbeat` comment lines, which a naive line-reader must skip.
 | `session.tool.called` | `{…, id, input:{command:…}, executed:false}` | **input available here** |
 | `session.tool.progress` | `{…, id, metadata:{shellID}}` | running |
 | `session.tool.success` | `{…, id, content:[{type:"text",text}], metadata:{status,truncated,exit}, executed}` | tool complete |
+| `session.tool.failed` | `{…, id, error, content}` | **[v2.0.32]** the failed-tool terminal event. There is **no** `session.tool.error` in the 2.0.32 binary — treat both names as terminal |
 | `session.step.streamed` / `.ended` | `{finish:"stop"\|"tool-calls", rawFinish, cost, tokens}` | step boundary |
 | `session.step.failed` | `{sessionID, assistantMessageID, error}` | step-level failure; the turn-level event below also fires |
 | `session.execution.started` | `{sessionID}` | turn start (ignore) |
 | `session.execution.succeeded` | `{sessionID}` | **turn end — emit STOP** |
+| `session.execution.interrupted` | `{sessionID}` | **[v2.0.32]** turn ended by an interrupt (e.g. Stop in another client); emit STOP if the turn is still active |
 | `session.execution.failed` | `{sessionID, error:{type, message, status, response:{body}}}` | **turn end — emit ERROR** |
 | `session.inbox.enqueued` | `{sessionID, inboxID, item:{type,payload:{text}}}` | **[NEW]** the user prompt being accepted — `inboxID` is the v2 stand-in for v1's `message.updated` user-message id. Emit `user_message_id` from here or rewind loses its anchor |
 | `session.inbox.delivered` | `{sessionID, inboxID}` | ignore |
@@ -407,6 +477,13 @@ and merges as an overlay rather than replacing the user's `opencode.json`
 Additive throughout: every v1 path is preserved and still takes priority when
 running against an old server. One flag, `_api_v2`, detected once per
 connection, drives everything.
+
+**Reference form only — do not hand-apply these.** `tm_patch.py` in
+[`patches/termmate_opencodev2/`](../patches/termmate_opencodev2/README.md)
+performs exactly these 29 substitutions idempotently; it covers §6.1–§6.10 plus
+the §14.2 deltas, anchors on the pristine 0.6.x text, and so fails loudly
+instead of fuzzily when upstream moves. The excerpts below exist to explain
+*what* changed and to survive upstream drift — the one-line route is §0.2.
 
 ### 6.1 Banner + password capture
 
@@ -565,7 +642,7 @@ Store per-tool state on `self._pending_tools[call_id]` as events arrive:
 session.text.delta        -> await self._emit_text_delta(data.get("delta"), data.get("assistantMessageID"))
 session.tool.input.started-> self._pending_tools[call_id] = {"name": data.get("name") or "tool"}
 session.tool.called       -> self._pending_tools.setdefault(call_id, {})["input"] = data.get("input")
-session.tool.success/error-> await self._finish_v2_tool(event_type, data)
+session.tool.success/failed-> await self._finish_v2_tool(event_type, data)   # [v2.0.32] name is .failed
 permission.asked          -> await self._handle_v2_permission(data)
 session.execution.succeeded -> await self._finish_turn()
 session.execution.failed  -> enqueue Message(MessageType.ERROR, ...); reset turn state; self._turn_done.set()
@@ -786,9 +863,32 @@ verb = "interrupt" if self._api_v2 else "abort"          # interrupt()
 await self._http("POST", f"/session/{sid}/{verb}")
 ```
 
-Rewind: v2 uses `DELETE /api/session/{id}/revert` and exposes **no message
-selector**, so it truncates to session start. Use
-`query={"messageID": message_id}` and accept the degraded behaviour. **[NOTE]**
+Rewind: **[v2.0.32]** use the *staged* pair — `POST /api/session/{id}/revert/stage`
+with `{"messageID": …}`, then `POST /api/session/{id}/revert/commit`. This keeps
+**message granularity** (verified: 6 messages → 2). `DELETE /api/session/{id}/revert`
+should be kept only as a fallback for older v2 builds: on 2.0.32 it means
+*"clear staged revert"* and reverts nothing at all, so a `rewind()` that still
+sends it reports success and does nothing — the worst kind of regression.
+
+```python
+if self._api_v2:
+    session_path = f"/session/{quote(self._session_id, safe='')}"
+    try:
+        await self._http("POST", f"{session_path}/revert/stage",
+                         body={"messageID": message_id})
+    except OpenCodeHTTPError as error:
+        if error.status not in (404, 405):
+            raise
+        await self._http("DELETE", f"{session_path}/revert",
+                         query={"messageID": message_id})
+    else:
+        await self._http("POST", f"{session_path}/revert/commit")
+```
+
+Unknown `/api/*` routes answer **404** (only *unprefixed* paths get the 200-SPA
+fallback), which is what makes the 404 probe a safe capability test. A *stale*
+message id also 404s (`MessageNotFoundError`) and lands in the fallback, which is
+harmless. **[NOTE]**
 This is easy to half-apply: branching `interrupt()` but leaving `rewind()` on
 v1's POST **passes an error-free turn and then fails on rewind**, so verify both
 verbs explicitly (§8).
@@ -894,14 +994,15 @@ win while the archive is present. Move the archive out of the load path:
 ```powershell
 # Name the backup after the version being disabled -- Package Control may have
 # moved several of these aside over time and they are not interchangeable.
+$ver = '061'   # 0.6.0 -> '060'; read package-metadata.json before you move it
 Move-Item "$env:APPDATA\Sublime Text\Installed Packages\TermMate.sublime-package" `
-          "$env:TEMP\TermMate.sublime-package.disabled.060"
+          "$env:TEMP\TermMate.sublime-package.disabled.$ver"
 ```
 
 Then unpack it into place (the archive alone is not enough):
 
 ```powershell
-Copy-Item "$env:TEMP\TermMate.sublime-package.disabled.060" "$env:TEMP\tm.zip"
+Copy-Item "$env:TEMP\TermMate.sublime-package.disabled.$ver" "$env:TEMP\tm.zip"
 Expand-Archive "$env:TEMP\tm.zip" `
               -DestinationPath "$env:APPDATA\Sublime Text\Packages\TermMate" -Force
 ```
@@ -913,11 +1014,29 @@ mv ~/Library/Application\ Support/Sublime\ Text/Installed\ Packages/TermMate.sub
    ~/TermMate.sublime-package.disabled
 ```
 
-Back up the single file before editing:
+Then patch with the committed script — it backs the file up itself
+(`TM_BACKUP`, default `%TEMP%\opencode\opencode_agent.py.pre_script.bak`), so
+there is no separate copy step:
 
 ```powershell
+python D:\ai_notes\patches\termmate_opencodev2\tm_patch.py
+```
+
+Expect one `OK` per edit plus `bytes before:` / `after:`; against an
+already-patched file it prints `No changes needed` and writes nothing. Override
+the target with `TM_TARGET` / `TM_BACKUP` on other machines. Two equivalents, if
+you prefer them:
+
+```powershell
+# a) the same 29 edits as one applyable diff, from the unpacked package root.
+#    -c core.autocrlf=false matters: this machine sets autocrlf=true, which
+#    rewrites the result to CRLF (content right, hash wrong).
+Set-Location "$env:APPDATA\Sublime Text\Packages\TermMate"
+git -c core.autocrlf=false apply -p1 "$env:TEMP\termmate_v2_032.patch"
+
+# b) hand-apply the §6 excerpts and make your own backup first
 Copy-Item "$env:APPDATA\Sublime Text\Packages\TermMate\genfoundry\opencode_agent.py" `
-          "$env:TEMP\opencode_agent.py.orig.060"
+          "$env:TEMP\opencode_agent.py.orig.$ver"
 ```
 
 **Restart Sublime Text after moving the archive** — otherwise the already-loaded
@@ -931,8 +1050,9 @@ plugin host keeps the old module and you will debug a fix that is not running.
 
 ## 8. Verification
 
-Do not trust a syntax check. `py_compile` passing means nothing about whether
-SSE events flow.
+Do not trust a syntax check. `py_compile` — or the package's `check_syntax.py` —
+passing means nothing about whether SSE events flow: it is a pre-flight, not
+verification.
 
 **The adapter has no `sublime` import** — `opencode_agent.py` and
 `base_agent.py` are pure stdlib — so it can be exercised outside Sublime. Copy
@@ -941,21 +1061,32 @@ directly. (See the import caveat in §0.1: as of 0.6.0 nothing in
 `genfoundry/` imports `sublime`, so this is now belt-and-braces rather than a
 hard requirement.)
 
-A working 19/19 harness is saved at **`%TEMP%\tm_verify.py`**. It loads both
-modules by path, asserts on the full round trip listed below, auto-approves
-`control_request` messages, and prints a per-assertion PASS/FAIL table. Run it
-with the credentialed model as `TM_MODEL`:
+A working harness is committed alongside the patch:
+**`patches/termmate_opencodev2/tm_verify_v2.py`** — 32 assertions over the full
+round trip listed below, auto-approving `control_request` messages and printing
+a per-assertion PASS/FAIL table. It is parameterised so it can test either the
+installed package or a staging copy:
 
 ```powershell
-$env:TM_MODEL='deepseek/deepseek-flash'
-& "C:\Program Files\Python314\python.exe" "$env:TEMP\tm_verify.py"
+$env:TM_CLI='C:\nvm4w\nodejs\node_modules\@opencode\cli\bin\opencode.exe'
+$env:TM_MODEL='deepseek/deepseek-flash'      # must be a model that answers
+$env:TM_FAIL_MODEL='ollama/llama3:8b'        # must fail fast and terminally
+python D:\ai_notes\patches\termmate_opencodev2\tm_verify_v2.py    # default: the installed package
+$env:TM_PKG="$env:APPDATA\Sublime Text\Packages\TermMate\genfoundry"   # or a staging dir
 ```
 
 Two traps it encodes, both hit while writing it:
 - `Message.content` is the **payload dict itself** — there is no `msg.content`
   wrapper for `control_request`. Read `msg.content["request"]` directly.
-- An unknown `message_id` on `rewind()` is fine on v2 (it truncates to session
-  start), so a dummy id is a valid test.
+- `rewind()` needs a **real** message id: assert the message count actually
+  drops (`GET /session/{id}/message` before/after). A dummy id 404s on
+  `revert/stage` and quietly lands in the fallback, so "the call returned" is not
+  a test — see the [v2.0.32] notes below.
+
+Earlier harnesses on this machine (`%TEMP%\tm_verify.py`, 19 assertions, first
+pass; `%TEMP%\tm_verify_2032.py`, 26, second pass) still exist locally and are
+what the §13/§14 numbers were produced with, but they are not in the repo —
+reproduce with `tm_verify_v2.py`.
 
 ```python
 options = AgentOptions(
@@ -999,7 +1130,17 @@ Two measurement traps in the harness itself:
   orphan assertion passes vacuously.
 - **An unreachable provider retries forever** and never emits a terminal
   event, so a "failure path" test using one will hang and look like an adapter
-  bug. Use `opencode/cat-jam-free` (fails in ~1s) instead.
+  bug. **[v2.0.32]** `opencode/cat-jam-free` no longer exists; use
+  **`ollama/llama3:8b`**, which fails terminally in **0.3 s** with
+  `session.execution.failed` (`… does not support tools`). `openai/*` on a
+  machine with no OpenAI credential stalls instead — do not use it.
+- **[v2.0.32] `rewind()` needs a *real* message id for the truncation
+  assertion.** A dummy id 404s on `revert/stage` and silently lands in the
+  fallback, so assert the message count actually drops
+  (`GET /session/{id}/message` before/after) using the id captured from
+  `user_message_id`. Also run the picker assertions **before** the rewind test —
+  rewinding the only populated session makes the Resume panel legitimately
+  empty and looks like a §6.10 failure.
 
 Observed run of the passing configuration:
 
@@ -1028,7 +1169,31 @@ failure path: 'Upstream request failed: Endpoint is unavailable.'  _turn_active 
 Two deltas from the 0.5.8 run above, both cosmetic: `models` is **129** rather
 than 128 (the catalogue grew), and rewind needed the v2 **`DELETE`** verb —
 porting §6.9's "renamed verbs" to *only* `interrupt()` leaves `rewind()` POSTing
-and it fails with a bare `OpenCodeHTTPError`. Branch **both**.
+and it fails with a bare `OpenCodeHTTPError`. Branch **both**. **[v2.0.32]**
+`rewind()` must now branch to the *staged* pair instead — see §6.9 and §14.
+
+**Re-verified against TermMate 0.6.1 / opencode v2.0.32 (2026-10-17): 32/32** with
+the committed `patches/termmate_opencodev2/tm_verify_v2.py` (log:
+`logs/tm_verify_v2.out.txt`), and **26/26** with the second-pass harness
+(`%TEMP%\tm_verify_2032.py`, parameterised by `TM_PKG` / `TM_CLI` / `TM_MODEL` /
+`TM_BAD_MODEL`). Both ran against the installed package; between them they add:
+user-message-id capture, a truncation assertion for the staged rewind, and two
+synthetic-event checks — `session.reasoning.delta` → `THINKING`, and
+`session.tool.failed` → a failed tool message (the latter cannot be triggered
+reliably with a real model, so it is driven through `_dispatch_event_v2`
+directly).
+
+The 26-assertion run's output, for comparison with the 19/19 above:
+
+```
+api_v2=True  url=http://127.0.0.1:60745  password_captured=True  pid=29856
+models=127   sessions=8   recovered turns=2
+PERMISSION: Bash permission_type=shell command='echo TERMMATE_V2_OK'
+tools=1 perms=1 errors=0 thinking=0        # thinking=3 with deepseek/deepseek-v4-pro
+rewind truncates to the chosen turn :: 6 -> 2 messages
+failure path (ollama/llama3:8b): '... does not support tools'  _turn_active cleared
+26/26 passed -> RESULT: PASS
+```
 
 Also verify your configuration is not clobbered: with the adapter's
 `OPENCODE_CONFIG_CONTENT` set, confirm `opencode debug config` still lists the
@@ -1048,22 +1213,30 @@ Honest accounting — these were deliberately **not** fixed:
    it". Implemented and measured against v2.0.27: the route returns
    **`{data: []}`** even immediately after a turn that verifiably created a
    file (retried at 0s/2s/5s), and `/api/vcs/status` likewise reports nothing
-   outside a git checkout. Its payload is also `FileDiff.Info`
+   outside a git checkout. **[v2.0.32]** Re-measured and *still* empty: after a
+   turn that wrote `hello_v2.txt`, both `/api/session/{id}/diff` (no params, i.e.
+   "newest user message's turn") and `?from=<user message id>` returned
+   `{data: []}`, and `/api/vcs/status` returned `{data: []}`. Its payload is also `FileDiff.Info`
    `{file, patch, additions, deletions, status}` — **not** the v1
    `{file, before, after}` that `_handle_session_diff()` expects, so the data
    would have to be reassembled from the unified `patch` as well. Edits apply
    correctly; they are just not listed. Do not ship the poll expecting it to
    fire.
-2. **Rewind has no message granularity on v2** — it truncates to session start.
+2. **Rewind granularity was lost on v2.0.27** — it truncated to session start.
+   **[v2.0.32]** No longer a gap: the staged pair (§6.9) reverts to the chosen
+   message. Use it.
 3. **Reasoning-effort variants are not surfaced.** v2 `Model.Info` carries
    `variants` (`low`/`medium`/`high`/`xhigh`/`max`) that TermMate's picker does
    not enumerate. Note the *separate* `-fast`/`-pro`/`-ultrafast` model ids from
    §5, which the patch **does** surface correctly.
-4. **`/api/provider` yields no provider metadata** on v2, so TermMate's
+4. **`/api/provider` yields no provider metadata** on v2.0.27, so TermMate's
    v1-derived "is this provider connected" filtering has no v2 equivalent. The
    picker relies on `/api/model`'s `enabled` flag instead, which reports `true`
-   for all 128 entries even when the provider cannot actually be reached — so a
-   broken provider is selectable and only fails at turn time.
+   for all entries even when the provider cannot actually be reached — so a
+   broken provider is selectable and only fails at turn time. **[v2.0.32]**
+   `/api/provider` is populated again, but nothing joins it to the model list, so
+   the behaviour above is unchanged; the picker still lists
+   `openai/*`/`google/*` on a DeepSeek-only machine.
 5. **Unreachable providers hang the turn indefinitely** (see the
    `session.retry.scheduled` note in §5). Stop is the only escape.
 
@@ -1103,10 +1276,15 @@ project sits on:
 
 | Package | Line | Latest at time of writing |
 |---|---|---|
-| `@opencode/cli` | **v2** (Go binary; what `opencode.ai/install` serves) | 2.0.x, stable since 2026-09-12; verified at **2.0.27** |
+| `@opencode/cli` | **v2** (Go binary; what `opencode.ai/install` serves) | 2.0.x, stable since 2026-09-12; verified at **2.0.27** and re-verified at **2.0.32** |
 | `opencode-ai` | **v1** (the Python-era CLI TermMate targets) | 1.18.x, still maintained; **not installed** on the verification machine |
-| `TermMate` | 0.5.8, released 2026-09-16 | ships the v1-only adapter |
+| `TermMate` | 0.5.8 → 0.6.1, released 2026-09-16 / 2026-10-16 | still ships the v1-only adapter; `opencode_agent.py` is byte-identical across 0.5.8/0.6.0/0.6.1 |
 | Sublime Text | 4 | verified at build **4215** (plugin host Python **3.14**) |
+
+The reproducible fix — patcher, harness, backups, hashes — lives in
+[`patches/termmate_opencodev2/`](../patches/termmate_opencodev2/README.md); the
+one-pass procedure is §0.2. Earlier revisions of this guide pointed at `%TEMP%`
+scratch files, which do not exist on any other machine.
 
 v1 and v2 are **separate npm packages**, not a handoff. TermMate 0.5.8 shipped
 four days after v2.0.0 went stable without adapting, so the breakage affects
@@ -1122,7 +1300,8 @@ treat §5 as a snapshot of 2.0.27, not a specification.
 **Upstream status, re-checked 2026-10-14** (against `flashmodel/termmate`, after
 the 0.6.0 release): `main:genfoundry/opencode_agent.py` is **still byte-identical
 to 0.5.8** — `SHA256 00F1849755503CB560361DEB3C406F4C86AD9F801448AB24F67808D8D24A2F10`,
-67 773 bytes, no `_api_v2`, no `/api` prefixing, no `session.text.delta`.
+67 773 bytes, no `_api_v2`, no `/api` prefixing, no `session.text.delta`
+(the 0.6.1 release is covered below).
 
 **0.6.0 shipped no v2 support.** What it added is the Google Antigravity provider:
 `genfoundry/antigravity_agent.py`, a new `AntigravityMessageProcessor` in
@@ -1144,8 +1323,17 @@ $raw = "https://raw.githubusercontent.com/flashmodel/termmate/main/genfoundry/op
 # compare upstream size/hash against the archive's; look for "_api_v2" / "prompt_async"
 ```
 
+**Upstream status, re-checked 2026-10-17** (after the 0.6.1 release of
+2026-10-16): still no v2 support — `genfoundry/opencode_agent.py` inside
+`TermMate.sublime-package` 0.6.1 is **still byte-identical to 0.5.8**
+(`SHA256 00F1849755503CB560361DEB3C406F4C86AD9F801448AB24F67808D8D24A2F10`,
+67 773 bytes), so the §6 patch still applies with zero fuzz and the port is
+still required.
+
 **Long-term:** the update loop is the real problem, not any single release. Either
-disable auto-update for TermMate or upstream the §6 diff.
+disable auto-update for TermMate or upstream the §6 diff. The 2026-10-17 machine
+had `auto_upgrade` left **on**, so the pin was declined and the patch was
+re-applied by hand — expect to repeat this on the next TermMate release.
 
 ---
 
@@ -1157,6 +1345,9 @@ Move-Item "$env:TEMP\TermMate.sublime-package.disabled.060" `
 Remove-Item "$env:APPDATA\Sublime Text\Packages\TermMate" -Recurse -Force
 ```
 
+Name the backup after the version being disabled (§7) — for 0.6.1 that is
+`TermMate.sublime-package.disabled.061`, which is what the 2026-10-17 pass used.
+
 Restart Sublime Text. Or, if the unpacked directory is already in place, just
 restore the one file:
 
@@ -1164,6 +1355,20 @@ restore the one file:
 Copy-Item "$env:TEMP\opencode_agent.py.orig.060" `
           "$env:APPDATA\Sublime Text\Packages\TermMate\genfoundry\opencode_agent.py" -Force
 ```
+
+Use `opencode_agent.py.orig.061` for the 0.6.1 pass (the two originals are
+byte-identical, so either works).
+
+The same files, durably, are in
+[`patches/termmate_opencodev2/backups/`](../patches/termmate_opencodev2/README.md)
+— use these when `%TEMP%` has been cleaned:
+
+| There | Restores |
+|---|---|
+| `opencode_agent.py.orig.060` | stock upstream adapter (0.6.0 and 0.6.1 are byte-identical, so one file covers both) |
+| `opencode_agent.py.pre_script.bak` | upstream + §6.1 only — historical, the state the second pass started from |
+| `opencode_agent.py.patched.verified` | the known-good patched adapter (`D5425D81…28BBFF`, LF) — what §0.2 reproduces |
+| `TermMate.sublime-package.disabled.060` | the 0.6.0 archive, if you need the whole package back |
 
 ---
 
@@ -1209,3 +1414,161 @@ model-id bug were reproduced with the unpatched adapter and against
 - **Verification harness traps:** capture the PID before `disconnect()` (it
   nulls `_server_process`, making the orphan check pass vacuously), and don't
   test the failure path with a provider the server retries forever.
+
+---
+
+## 14. Third pass (opencode v2.0.32 + TermMate 0.6.1)
+
+Re-applied end-to-end on 2026-10-17 after Package Control's 0.6.0 → 0.6.1
+upgrade reverted the previous patch (exactly the failure §11 predicts). The §6
+port applied with **zero fuzz** — TermMate 0.6.1's `opencode_agent.py` is
+byte-identical to 0.5.8/0.6.0 — so this section is only the *delta*, not a
+replacement for §6. Read §0–§8 as written, then apply this.
+
+### 14.1 What still holds on 2.0.32 (re-measured, not assumed)
+
+| Claim from §5/§6 | v2.0.32 |
+|---|---|
+| Banner is `server listening on <url>` + `server password <pw>` on the next line | **unchanged** — `_SERVER_URL_RE` / `_password` capture work as-is |
+| `/api/info` is a reliable version discriminator | **unchanged** (`{version:"2.0.32",pid,urls,paths,capabilities}`) |
+| Unprefixed paths return `200 text/html` (the SPA) | **unchanged** (`GET /provider` → 6962 bytes of HTML) |
+| **Unknown `/api/*` paths return 404** | confirmed — this is what makes the staged-revert probe safe |
+| `POST /api/session/{id}/prompt` body `{text}`, `additionalProperties:false` | **unchanged** |
+| `/model` and `/agent` bodies, `Model.Ref{id,providerID,variant}` | **unchanged** |
+| `permission.asked` = `{id,sessionID,action,resources,save,source{type,messageID,id}}` and `.../permission/{requestID}/reply` `{decision}` | **unchanged** |
+| Event names for text / reasoning / tool / inbox / execution | **unchanged** (live SSE capture, 40 events, all names as tabulated) |
+| `/api/model` list shape incl. `enabled` and the 39 aliased `-fast`/`-pro` ids | **unchanged** (127 entries here; `openai/gpt-6.1-sol-fast` etc. still have `id != modelID`) |
+| Message envelope for the picker (`{data,cursor}`, flat messages, pseudo-types `idle`/`model-switched`/`agent-switched`) | **unchanged** |
+| `/api/session/{id}/diff` returns `{data:[]}` after a real file write (§9.1) | **still empty** — gap stays a gap |
+
+### 14.2 The two v2.0.32 behaviour changes that need code
+
+**D1 — `rewind()` must stage, not `DELETE`.** `DELETE /api/session/{id}/revert`
+now means *"clear staged revert"* and reverts **nothing**: it answers 204 and the
+session's message list is unchanged (7 → 7 on a warm probe; on a cold one it even
+*grew* 6 → 7 as a pseudo-message landed). A `rewind()` left on that verb
+therefore reports success and does nothing — the worst kind of regression. The
+working verb pair is `POST …/revert/stage {"messageID"}` → `POST
+…/revert/commit`, which restores exact message granularity (measured: 6 → 2).
+Full code and the 404-fallback for older v2 builds is in §6.9.
+
+**D2 — the failed-tool terminal event is `session.tool.failed`.** Grepping the
+2.0.32 binary for `session.*.*` yields `session.tool.called` /
+`.input` / `.progress` / `.success` / **`.failed`** — there is **no**
+`session.tool.error`. A handler that only matches `.success`/`.error` renders
+successful tools and then silently drops every failed one. Treat
+`{"session.tool.success", "session.tool.failed", "session.tool.error"}` as
+terminal and mark failure as `event_type != "session.tool.success"`.
+
+Both are additive and cost nothing on v2.0.27 or v1.
+
+**D3 (defensive) — `session.execution.interrupted`.** Interrupting a turn ends it
+with this event rather than `session.execution.succeeded`. A local `interrupt()`
+has already cleared the turn state, so route it through `_finish_turn()`: it is a
+no-op locally and releases the waiter when the Stop came from another client.
+
+New event names seen on 2.0.32 that the patch deliberately ignores:
+`session.step.failed`, `session.compaction.*`, `session.skill.activated`,
+`session.metadata.updated`, `session.usage.recorded`, `permission.rejected`.
+
+### 14.3 Also verified on 2.0.32
+
+- **Reasoning really does stream**: with `deepseek/deepseek-v4-pro`,
+  `session.reasoning.started/delta/ended` fire and the harness reports
+  `thinking=3` — the §6.6 `THINKING` mapping is live, not dead code.
+  (`deepseek/deepseek-flash` emits none, which is why the harness also drives the
+  handler synthetically.)
+- **`session.reasoning.delta` / `session.tool.failed` synthetic checks** pass by
+  calling `_dispatch_event_v2` directly — the only way to cover tool failure
+  without a model that can actually fail a tool.
+- **`directory=<cwd>` query param is still accepted** on `/api/info`, `/model`,
+  `/provider`, `/session` (so `_build_url`'s `include_directory=True` default is
+  fine), and unknown params are ignored.
+- **`POST /api/session` tolerates extra body keys**, unlike the four
+  `additionalProperties:false` routes in §5.
+- **Fast-failing model for the failure path:** `ollama/llama3:8b` →
+  `session.execution.failed` in 0.3 s (`does not support tools`).
+  `opencode/cat-jam-free` from the 2.0.27 pass no longer exists;
+  `openai/gpt-5-nano` on a credential-less machine stalls instead of failing.
+  `opencode/big-pickle` **succeeded**, so not every `opencode/*` model is broken.
+
+### 14.4 Artifacts and install (this machine)
+
+**Committed with this guide** — this is the reproducible path, i.e. §0.2:
+
+| File | What it is |
+|---|---|
+| `patches\termmate_opencodev2\tm_patch.py` | 29 anchor edits, idempotent, **§6.1 included** (the old "apply 6.1 by hand first" prerequisite is gone) and the staged-revert D1 |
+| `patches\termmate_opencodev2\tm_verify_v2.py` | the 32-assertion harness; the rewind checks count messages, so a `DELETE /revert` no-op fails |
+| `patches\termmate_opencodev2\check_syntax.py` | `ast.parse` wrapper — `python check_syntax.py <file>` |
+| `patches\termmate_opencodev2\backups\` | pristine / pre-script / verified adapters and the 0.6.0 archive (table in §12) |
+| `patches\termmate_opencodev2\logs\` | the 2.0.30 probe capture and the 2.0.32 verification log |
+| `patches\termmate_opencodev2\README.md` | sizes, SHA-256 and the full usage |
+
+**This machine only** — `%TEMP%` scratch, not reproducible from the repo:
+
+| File | What it is |
+|---|---|
+| `%TEMP%\termmate_v2_032.patch` | the same 29 edits as one applyable diff (regenerated with `tm_make_patch.py`; `tm_patch.py` is the durable form) |
+| `%TEMP%\opencode_agent.py.orig.061` | pristine 0.6.1 adapter, as first extracted from the archive |
+| `%TEMP%\TermMate.sublime-package.disabled.061` | the archived 0.6.1 package, moved out of `Installed Packages\` |
+| `%TEMP%\tm_verify.py`, `%TEMP%\tm_verify_2032.py` | the earlier 19- and 26-assertion harnesses — the history behind §8/§13 |
+| `%TEMP%\tm_make_patch.py` | regenerates that patch from a pristine copy with the right relative paths |
+
+Install is §0.2 / §7 verbatim, with `061` names: unpack the archive into
+`Packages\TermMate`, overwrite `genfoundry\opencode_agent.py` (this pass used
+`python tm_patch.py` from the package rather than the saved diff), move the
+archive out of `Installed Packages\`, restart Sublime Text.
+
+The patch applies in one step, from the unpacked TermMate root:
+
+```powershell
+Set-Location "$env:APPDATA\Sublime Text\Packages\TermMate"
+git -c core.autocrlf=false apply -p1 "$env:TEMP\termmate_v2_032.patch"
+```
+
+Three things that cost time here. **`git diff` on Windows writes absolute
+`"a/C:\…"` paths**, which `git apply` rejects with `error: invalid path 'C:\…'`;
+that is why the saved patch was regenerated with `genfoundry/opencode_agent.py`
+relative paths (and CRLF normalised to LF, since the adapter is an LF file — a
+CRLF patch against it fails to match context). **`core.autocrlf=true` (set
+globally on this machine) makes `git apply` rewrite the result to CRLF**: the
+content is right but the hash is not, so pass `-c core.autocrlf=false` to get
+the byte-identical LF file. And the `opencode.cmd`-leaks-the-child-server trap
+from §4 applies to every probe in this pass, not just the first: use
+`taskkill /PID <pid> /T /F`.
+To rebuild the patch from a pristine copy, point `tm_make_patch.py`'s `ORIG` at
+it and run it; it wraps exactly this call and rewrites the headers:
+
+```powershell
+git diff --no-index --no-color "$env:TEMP\opencode_agent.py.orig.061" `
+    "$env:APPDATA\Sublime Text\Packages\TermMate\genfoundry\opencode_agent.py"
+# then rewrite the diff/---/+++ headers to a/genfoundry/… b/genfoundry/…
+```
+
+**Result: 32/32 assertions pass against the installed package** (the package
+harness, `deepseek/deepseek-flash`, `ollama/llama3:8b` for the failure path),
+**26/26** with the earlier `%TEMP%\tm_verify_2032.py` harness on the same file
+(which also covers real reasoning deltas with `deepseek/deepseek-v4-pro`), and
+running the package's `tm_patch.py` against the pristine 0.6.1 adapter — or
+against the older `pre_script.bak` (§6.1 already applied) — reproduces the
+installed file byte-for-byte (`SHA256 D5425D81…28BBFF`, LF). No orphaned
+`opencode.exe` after any run.
+
+One wire-format correction found while upgrading the harness: `GET
+/api/session/{id}/message` on 2.0.32 returns a **flat** `{"data": [{id, type,
+text|content, …}], "cursor": …}` envelope (newest first), *not* the `{info,
+parts}` pairs of 2.0.27. Both the adapter's session picker and the harness parse
+the new shape.
+
+### 14.5 Still open
+
+Everything in §9, minus §9.2 (rewind granularity, now fixed by D1). The
+unreachable-provider hang (§9.5) and the empty changed-files panel (§9.1) are
+server behaviour, not adapter bugs — do not "fix" them with invented timeouts.
+
+**And the patch is still upstream-brittle:** Package Control auto-upgrade was left
+enabled on this machine, so the next TermMate release will restore the archive and
+revert the patch. When that happens, re-run `patches/termmate_opencodev2/`
+(§14.4): `python tm_patch.py` works on any release whose `opencode_agent.py`
+still hashes to `00F1849…A2F10`.

@@ -8,7 +8,7 @@
 
 ---
 
-## 0. 先读这段：这里有三个互相独立的问题
+## 0. 先读这段：这里有四个互相独立的问题
 
 不要试图一次修完。它们症状相似，但根因完全不同，**必须按顺序排查**。
 
@@ -17,8 +17,13 @@
 | 1 | 左侧有**两个**图标；点 "Jupyter AI Chat" 报 "problem with the Chat backend"；控制台反复刷 `404 GET /api/ai/chats` | jupyter_ai 升到 3.x 后，早先 2.x 的前端扩展 `@jupyter-ai/core` 变成孤儿文件，仍在请求 3.x 已删除的 `/api/ai/*` 后端 | §2 |
 | 2 | "Jupyter Chat" 里**没有 Agent 选项**，或选了 Agent 也加载不出来 | persona 列表为空。8 个内置 persona 在 Windows 上全部不可用；本地 persona 又被放在了错误的目录 | §3 §4 |
 | 3 | 选了 Agent，发送消息报 `NotImplementedError:`（**错误信息为空**） | jupyter_server 在 Windows 上强制 `SelectorEventLoop`，该事件循环**无法创建子进程**。这是上游缺陷，影响所有 ACP Agent | §5 |
+| 4 | 发送消息报 `FileNotFoundError: [WinError 2]`（**且每次 opencode 升级后复发**） | `CreateProcess` 只补 `.exe`，不认 npm 的 `.cmd` shim。**改 PATH 顺序在 nvm4w / Program Files node 环境下无效**，见 §3.1 | §3.1 §6 |
 
-**关键判据**：`NotImplementedError:` 后面什么都没有 = 事件循环问题，不要往 opencode 或 API key 方向查。
+**关键判据**：
+
+- `NotImplementedError:` 后面什么都没有 = 事件循环问题，不要往 opencode 或 API key 方向查。
+- `FileNotFoundError: [WinError 2]` = 可执行文件解析问题。先跑 §3.1 的
+  `shutil.which('opencode')`，返回 `.CMD` 就是这个问题。
 
 ---
 
@@ -108,41 +113,68 @@ Remove-Item $ext -Recurse -Force
 
 ### 3.1 npm 的 `.cmd` shim 无法被 CreateProcess 启动
 
-`jupyter_ai_acp_client` 用 `subprocess.run(["opencode","--version"])` 和
-`asyncio.create_subprocess_exec("opencode","acp")` 启动 opencode。
-Windows 的 CreateProcess 在 PATH 里**只尝试补 `.exe`**，不认 `.cmd` / `.bat`，于是：
+`jupyter_ai_acp_client` 用 `asyncio.create_subprocess_exec("opencode","acp")` 启动 opencode。
+Windows 的 CreateProcess 在 PATH 里**只尝试补 `.exe`**，不认 `.cmd` / `.bat` / 无扩展名的
+sh shim，于是：
 
 ```
 FileNotFoundError: [WinError 2] 系统找不到指定的文件
 ```
 
-但 npm 其实装了真的 exe，只是被 `.cmd` 挡住了：
+npm 其实装了真的 exe，只是被 `.cmd` 挡住了。
+
+#### 诊断
 
 ```powershell
-Get-ChildItem "$env:APPDATA\npm" -Filter "opencode*"
-Get-Content "$env:APPDATA\npm\opencode.cmd"     # 能看到真正的 exe 路径
-```
-
-修复：把**存放 `opencode.exe` 的目录**插到用户 PATH 的**最前面**。
-顺序是关键 —— 必须排在 `$env:APPDATA\npm` 之前，否则 `shutil.which` 只会返回 `.cmd`。
-
-```powershell
-$bin = "$env:APPDATA\npm\node_modules\@opencode\cli\bin"
-if (-not (Test-Path "$bin\opencode.exe")) { throw "找不到 opencode.exe，请先 npm install -g opencode-ai" }
-
-$user = [Environment]::GetEnvironmentVariable("Path","User")
-$parts = $user -split ';' | Where-Object { $_ -and $_.Trim() -ne $bin }
-[Environment]::SetEnvironmentVariable("Path", (($bin + ";" + ($parts -join ';')).TrimEnd(';')), "User")
-```
-
-验证：
-
-```powershell
-# 注意：新 PATH 只对新进程生效，这里要显式刷新
-$env:PATH = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")
+# 1. which 解析到了什么？（返回 .CMD = 有问题）
 python -c "import shutil; print(shutil.which('opencode'))"
-# 期望输出以 .EXE 结尾，不是 .CMD
+
+# 2. npm 全局 prefix 在哪？（nvm4w 环境下会和 Machine PATH 里的目录重合）
+cmd /c "npm config get prefix"
+
+# 3. 真正的 exe 在哪
+Get-ChildItem "<prefix>\node_modules\@opencode\cli\bin"
+
+# 4. shim 里写的真实路径
+Get-Content "<prefix>\opencode.cmd"
 ```
+
+#### ⚠️ 改 PATH 顺序**不总是有效**
+
+Windows 拼装进程 PATH 的顺序是 **Machine PATH ; User PATH**。所以：
+
+- 若 npm prefix 目录**不在** Machine PATH 里（默认的 `%APPDATA%\npm` 就是），
+  把它插到 User PATH 最前面就生效 —— 这是本手册早期版本的做法。
+- 但用 **nvm4w**（`npm config get prefix` = `C:\nvm4w\nodejs`）或装到
+  `C:\Program Files\nodejs` 时，那个目录**在 Machine PATH 里**，排在 User PATH 之前。
+  **往 User PATH 最前面插是插不赢的**，`shutil.which` 永远返回 `.cmd`；
+  而非管理员又改不了 Machine PATH。
+
+```powershell
+# 确认到底哪个目录赢了
+python -c "import os; p=os.environ['PATH']; print([d for d in p.split(';') if d and (os.path.exists(os.path.join(d,'opencode.exe')) or os.path.exists(os.path.join(d,'opencode.cmd')))])"
+# 若 'C:\nvm4w\nodejs' 排在 opencode.exe 所在目录之前 → PATH 方案无效
+```
+
+#### 正解：让 persona 自己解析 exe
+
+§6 的 persona 带 `resolve_opencode_executable()`，按以下顺序找真正的
+`opencode.exe`，完全绕开 PATH 顺序：
+
+1. 环境变量 `OPENCODE_ACP_EXE`（显式覆盖）
+2. `npm config get prefix` 报告的 prefix 下的 `node_modules\@opencode\cli\bin\opencode.exe`
+3. `%APPDATA%\npm`、PATH 里的每个目录、`%ProgramFiles%\nodejs`
+4. 从 `opencode.cmd` shim 文本里正则抠出被引号包住的 `opencode.exe` 路径
+5. PATH 里直接存在 `opencode.exe` 的目录
+
+多个候选时按 **mtime 最新**取胜 —— 这样升级留下的旧副本不会被误用。
+
+可选环境变量：`OPENCODE_ACP_EXE`（直接指定 exe）、`OPENCODE_NPM_PREFIX`（跳过 `npm` 调用）。
+
+> **为什么必须写在 persona 里**：每次 opencode 升级都可能搬家（换 prefix、换 nvm 的
+> node 版本）。PATH 是机器级全局状态，改它会互相打架，也会影响别的工具；
+> 而 persona 是**跟着这台机器的 Jupyter 配置走的**，解析逻辑放在那里才稳定。
+> 只改文档不改代码，等于把同一个坑留给下一个 opencode 版本。
 
 ### 3.2 内置 persona 的版本门
 
@@ -236,366 +268,52 @@ python -c "import asyncio,sys; asyncio.run(asyncio.create_subprocess_exec('cmd.e
 
 ---
 
-## 6. 落地：写入本地 persona 文件
+## 6. 落地：同步本地 persona 文件
 
-把下面**完整**内容写到 `<JupyterLab root_dir>\.jupyter\personas\opencode_persona.py`。
+persona 源码**不再内嵌在手册里**。规范源是本手册所在仓库的
+`personas/opencode_persona.py` —— 内嵌副本必然漂移（本手册就因此在 opencode
+升级后给出过过期的 PATH 结论，还差点把 §6 的说明和真实代码脱节）。
+
+```powershell
+$src = "D:\ai_notes\personas\opencode_persona.py"
+$dst = "<JupyterLab root_dir>\.jupyter\personas\opencode_persona.py"
+
+New-Item -ItemType Directory -Force -Path (Split-Path $dst)
+if (Test-Path $dst) { Copy-Item $dst "$env:TEMP\opencode_persona.py.bak" -Force }
+Copy-Item $src $dst -Force
+Remove-Item (Join-Path (Split-Path $dst) "__pycache__") -Recurse -Force
+```
+
+改 persona 后**必须**跑一遍 §7.1 的探针再重启 JupyterLab。
 
 文件名规则：`*.py` 且文件名（不含扩展名，大小写不敏感）**包含 `persona`**，
 且不以 `_` 或 `.` 开头。以 `_` 开头会被当成私有模块跳过。
 
-````python
-r"""Local Jupyter AI persona: OpenCode (ACP), with Windows workarounds.
+### 6.1 这个 persona 解决三件事
+
+| 上游问题 | 手法 |
+|---|---|
+| 内置 `opencode-acp` persona 的版本门 `>=1.0.0,<2` | 自带本地 persona，根本不加载内置那个 |
+| `FileNotFoundError: [WinError 2]`（npm `.cmd` shim） | `resolve_opencode_executable()` 自己找真实 exe，见 §3.1 |
+| `NotImplementedError:`（SelectorEventLoop 起不了子进程） | `_spawn_process()`：`subprocess.Popen` + 读写线程喂给真的 `StreamReader` / `StreamWriter`，见 §5 |
+
+### 6.2 改 persona 时的注意事项
+
+- 模块 docstring 必须是 **raw string**（前缀 `r`）。docstring 里出现
+  `%USERPROFILE%\...` 这类路径时，`\U` 会被 Python 当成 unicode 转义，直接抛
+  `SyntaxError: (unicode error) 'unicodeescape' codec can't decode bytes`。
+- `_init_agent_subprocess()` 里非 shim 分支要调 `super()`，它额外带了
+  `limit=50MB` 和 `start_new_session=True`，别漏。
+- 改完先跑 §7.1 的探针，再按 §7 重启 JupyterLab。
 
-Two upstream problems are worked around here:
-
-1. Version gate. The `@jupyter-ai/acp-client` package ships an `opencode-acp`
-   persona that refuses to load unless the `opencode` CLI is >=1.0.0,<2. That
-   check also runs `subprocess.run(["opencode", "--version"])`, which fails on
-   Windows for *any* version, because the npm shim is `opencode.cmd`, a batch
-   file that `CreateProcess` cannot launch.
-
-2. Subprocess spawning. `jupyter_server` forces
-   `asyncio.WindowsSelectorEventLoopPolicy` on Windows (serverapp.py,
-   `_init_asyncio_patch`), and a `SelectorEventLoop` cannot create subprocesses
-   or connect pipes at all -- it raises a bare `NotImplementedError`. This makes
-   *every* ACP persona unusable on Windows. `_spawn_process` below builds the
-   process from `subprocess.Popen` and wires its pipes to real
-   `asyncio.StreamReader`/`StreamWriter` objects via plain reader/writer
-   threads, which is the same trick `acp.stdio` uses for its own Windows stdio.
-
-This persona is loaded automatically from the workspace `.jupyter/personas/`
-directory (NOT from `~/.jupyter/personas/` -- Jupyter AI only looks inside the
-JupyterLab root dir and its subdirectories).
-
-Prerequisites:
-  * opencode CLI installed and on PATH
-  * the folder holding the real `opencode.exe`
-    (`%APPDATA%\npm\node_modules\@opencode\cli\bin`) must come BEFORE
-    `%APPDATA%\npm` in PATH, otherwise only the .cmd shim is found and spawning fails.
-  * Run `opencode auth` once, or export your provider's API key, before
-    starting JupyterLab.
-"""
-
-import asyncio
-import os
-import platform
-import queue
-import subprocess
-import threading
-from pathlib import Path
-
-from acp.exceptions import RequestError
-from jupyter_ai_persona_manager import PersonaDefaults
-from jupyterlab_chat.models import Message
-
-from jupyter_ai_acp_client.base_acp_persona import BaseAcpPersona
-
-_STREAM_LIMIT = 50 * 1024 * 1024
-_WRITE_HIGH_WATER = 4 * 1024 * 1024
-
-
-def _needs_pipe_shim(loop: asyncio.AbstractEventLoop) -> bool:
-    """True when this loop cannot spawn subprocesses / connect pipes."""
-    return platform.system() == "Windows" and isinstance(loop, asyncio.SelectorEventLoop)
-
-
-# --------------------------------------------------------------------------
-# Windows subprocess shim
-# --------------------------------------------------------------------------
-
-
-class _PipeWriteProtocol(asyncio.BaseProtocol):
-    """Protocol that turns transport pause/resume into StreamWriter.drain()."""
-
-    def __init__(self) -> None:
-        self._loop = asyncio.get_event_loop()
-        self._paused = False
-        self._waiter: asyncio.Future | None = None
-
-    def pause_writing(self) -> None:
-        self._paused = True
-        if self._waiter is None:
-            self._waiter = self._loop.create_future()
-
-    def resume_writing(self) -> None:
-        self._paused = False
-        if self._waiter is not None and not self._waiter.done():
-            self._waiter.set_result(None)
-        self._waiter = None
-
-    async def _drain_helper(self) -> None:
-        """Awaited by ``StreamWriter.drain()`` while the pipe is congested."""
-        if self._paused and self._waiter is not None:
-            await self._waiter
-
-    def _eof(self) -> None:
-        self.resume_writing()
-
-
-class _PipeWriteTransport(asyncio.BaseTransport):
-    """asyncio transport that hands writes to a dedicated writer thread."""
-
-    def __init__(
-        self,
-        items: queue.Queue,
-        loop: asyncio.AbstractEventLoop,
-        protocol: "_PipeWriteProtocol",
-    ) -> None:
-        self._items = items
-        self._loop = loop
-        self._closing = False
-        self._pending_bytes = 0
-        self._protocol = protocol
-
-    def write(self, data: bytes) -> None:
-        if self._closing:
-            return
-        payload = bytes(data)
-        if not payload:
-            return
-        self._pending_bytes += len(payload)
-        self._items.put(payload)
-        if self._pending_bytes > _WRITE_HIGH_WATER:
-            self._protocol.pause_writing()
-        else:
-            self._protocol.resume_writing()
-
-    def close(self) -> None:
-        if not self._closing:
-            self._closing = True
-            self._items.put(None)
-
-    def abort(self) -> None:
-        self.close()
-
-    def is_closing(self) -> bool:
-        return self._closing
-
-    def can_write_eof(self) -> bool:
-        return False
-
-    def get_extra_info(self, name: str, default=None):
-        return default
-
-
-class _PipeProcess:
-    """Duck-typed stand-in for `asyncio.subprocess.Process`.
-
-    Exposes the small surface Jupyter AI / the `acp` library actually use:
-    `.stdin` (StreamWriter), `.stdout` (StreamReader), `.pid`, `.returncode`,
-    `.wait()`, `.terminate()` and `.kill()`.
-    """
-
-    def __init__(
-        self,
-        popen: subprocess.Popen,
-        reader: asyncio.StreamReader,
-        writer: asyncio.StreamWriter,
-        transport: _PipeWriteTransport,
-    ) -> None:
-        self._popen = popen
-        self.stdin = writer
-        self.stdout = reader
-        self.stderr = None
-        self._transport = transport
-
-    @property
-    def pid(self) -> int:
-        return self._popen.pid
-
-    @property
-    def returncode(self) -> int | None:
-        return self._popen.poll()
-
-    async def wait(self) -> int:
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self._popen.wait)
-
-    def terminate(self) -> None:
-        with _suppress():
-            self._popen.terminate()
-
-    def kill(self) -> None:
-        with _suppress():
-            self._popen.kill()
-
-    def send_signal(self, sig) -> None:
-        with _suppress():
-            self._popen.send_signal(sig)
-
-
-class _suppress:
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return exc_type is not None
-
-
-async def _spawn_process(command: list[str], env: dict[str, str] | None) -> _PipeProcess:
-    """Spawn `command` and expose its stdio as asyncio streams, on any loop."""
-    loop = asyncio.get_running_loop()
-
-    popen = await loop.run_in_executor(
-        None,
-        lambda: subprocess.Popen(  # noqa: S603
-            command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=None,  # inherit the server's stderr, like the base persona
-            bufsize=0,
-            env=env,
-        ),
-    )
-
-    # --- stdout: blocking reads on a thread, fed into a StreamReader --------
-    reader = asyncio.StreamReader(limit=_STREAM_LIMIT, loop=loop)
-    out_fd = popen.stdout.fileno()
-
-    def _pump() -> None:
-        try:
-            while True:
-                chunk = os.read(out_fd, 65536)
-                if not chunk:
-                    break
-                loop.call_soon_threadsafe(reader.feed_data, chunk)
-        except Exception:
-            pass
-        finally:
-            loop.call_soon_threadsafe(reader.feed_eof)
-
-    threading.Thread(target=_pump, name="acp-stdout-pump", daemon=True).start()
-
-    # --- stdin: writes on a thread, surfaced through a real StreamWriter ----
-    items: queue.Queue = queue.Queue()
-    protocol = _PipeWriteProtocol()
-    transport = _PipeWriteTransport(items, loop, protocol)
-    writer = asyncio.StreamWriter(transport, protocol, None, loop)
-
-    in_fd = popen.stdin.fileno()
-
-    def _writer_thread() -> None:
-        while True:
-            payload = items.get()
-            if payload is None:
-                break
-            try:
-                os.write(in_fd, payload)
-            except Exception:
-                break
-            if items.empty():
-                loop.call_soon_threadsafe(protocol.resume_writing)
-
-    threading.Thread(
-        target=_writer_thread, name="acp-stdin-writer", daemon=True
-    ).start()
-
-    return _PipeProcess(popen, reader, writer, transport)
-
-
-# --------------------------------------------------------------------------
-# Persona
-# --------------------------------------------------------------------------
-
-
-def _acp_pkg(*parts: str) -> str:
-    """Absolute path to a file shipped inside the jupyter_ai_acp_client package."""
-    import jupyter_ai_acp_client
-
-    return os.path.abspath(
-        os.path.join(os.path.dirname(jupyter_ai_acp_client.__file__), *parts)
-    )
-
-
-def _is_auth_error(error: Exception) -> bool:
-    message = str(error).lower()
-    return any(
-        keyword in message
-        for keyword in (
-            "api key",
-            "api_key",
-            "authentication",
-            "authorized",
-            "credential",
-            "forbidden",
-            "not configured",
-        )
-    )
-
-
-def _has_user_config() -> bool:
-    config_dir = Path.home() / ".config" / "opencode"
-    return (config_dir / "opencode.json").exists() or (config_dir / "opencode.jsonc").exists()
-
-
-class OpenCodePersona(BaseAcpPersona):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, executable=["opencode", "acp"], **kwargs)
-
-    @property
-    def defaults(self) -> PersonaDefaults:
-        return PersonaDefaults(
-            name="OpenCode",
-            description="OpenCode as an ACP agent persona (local, no version gate).",
-            avatar_path=_acp_pkg("static", "opencode.svg"),
-            system_prompt="unused",
-        )
-
-    async def before_agent_subprocess(self):
-        return None
-
-    async def _init_agent_subprocess(self):
-        env: dict[str, str] | None = None
-
-        # Ask OpenCode to confirm edits / shell commands before running them.
-        if "OPENCODE_CONFIG" not in os.environ and not _has_user_config():
-            env = os.environ.copy()
-            env["OPENCODE_CONFIG"] = _acp_pkg("acp_personas", "opencode.json")
-
-        loop = asyncio.get_running_loop()
-        if _needs_pipe_shim(loop):
-            self.log.info(
-                "SelectorEventLoop cannot spawn subprocesses; using the "
-                "thread-based pipe shim to launch '%s'.",
-                " ".join(self._executable),
-            )
-            return await _spawn_process(list(self._executable), env)
-
-        return await super()._init_agent_subprocess(env=env)
-
-    async def is_authed(self) -> bool:
-        return True
-
-    async def process_message(self, message: Message) -> None:
-        try:
-            await super().process_message(message)
-        except RequestError as error:
-            if not _is_auth_error(error):
-                raise
-            self.log.info("[OpenCode] Authentication required: %s", error)
-            await self.handle_message_no_auth(message)
-
-    async def handle_message_no_auth(self, message: Message | None = None) -> None:
-        await super().handle_message_no_auth(message)
-        self.send_message(
-            "OpenCode isn't configured yet.\n\n"
-            "- Run `opencode auth` in a terminal to configure your LLM provider.\n"
-            "- Or set your provider's API key as an environment variable "
-            "(e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) before starting JupyterLab.\n"
-            "- If you set it in a new shell, restart the JupyterLab server."
-        )
-````
-
-> **注意**：模块 docstring 必须是 **raw string**（前缀 `r`）。
-> docstring 里出现了 `%USERPROFILE%\...` 这类路径时，`\U` 会被 Python 当成 unicode
-> 转义，直接抛 `SyntaxError: (unicode error) 'unicodeescape' codec can't decode bytes`。
 
 ---
 
 ## 7. 生效与验收
 
 1. **完全退出所有 JupyterLab 进程**（persona 类在进程启动时加载，热重载无效）。
-2. **重开终端**（PATH 改动只对新进程生效）。
+2. **重开终端**。PATH 已不再是关键路径（见 §3.1），但如果你用了
+   `OPENCODE_ACP_EXE` / `OPENCODE_NPM_PREFIX` 覆盖，它们同样只对新进程生效。
 3. 启动 JupyterLab，浏览器 **Ctrl+Shift+R** 强制刷新（federated 扩展清单有缓存）。
 4. 进入 "Jupyter Chat"，选择 **OpenCode** persona，发消息。
 
@@ -728,7 +446,10 @@ SelectorEventLoop cannot spawn subprocesses; using the thread-based pipe shim to
 | 关闭聊天时报一次 `AttributeError: os.getpgid` | `base_acp_persona.py` 关闭路径用了 POSIX-only API，Windows 没有。**功能不受影响** | 忽略；残留的 `opencode acp` 进程手动结束 |
 | 用户级 PATH 里没有 `OPENAI_API_KEY` 等 | 只在当前 shell 有效。JupyterLab 若不是从该 shell 启动就看不到 | `setx OPENAI_API_KEY "..."`，或用 `opencode auth` 存一个 provider |
 | persona 不出现 | 放错目录（§4），或没重启 JupyterLab 进程 | 检查 root_dir、重启、Ctrl+Shift+R |
-| `FileNotFoundError: [WinError 2]` | PATH 顺序问题，`.cmd` 挡住了 `.exe`（§3.1） | 把 bin 目录插到 PATH 最前 |
+| `FileNotFoundError: [WinError 2]` | `.cmd` shim 挡住了 `.exe`（§3.1）。**改 PATH 顺序不一定管用** —— nvm4w / Program Files node 的 prefix 在 Machine PATH 里 | 用带 `resolve_opencode_executable()` 的 persona；或临时设 `OPENCODE_ACP_EXE=<完整 exe 路径>` |
+| opencode 升级后又报 `[WinError 2]` | 升级把 exe 搬到了别处（换 prefix / 换 nvm node 版本） | persona 里的解析器按 mtime 取最新；仍失败就设 `OPENCODE_ACP_EXE` |
+| `shutil.which('opencode')` 返回 `.CMD` | 正常现象，**不用修**。persona 不走 PATH | 忽略 |
+| 改完文档后中文变成乱码 | PowerShell 的 `Get-Content`/`Set-Content` 用控制台代码页（cp936）读写 UTF-8 文件，字节被二次转码且不可逆 | 对本仓库文件只用 UTF-8 显式读写的工具（编辑器、`edit`、Python `read_text(encoding="utf-8")`）；误改后用 `git checkout --` 回滚 |
 | 升级 `jupyter-ai-acp-client` 后 persona 报错 | 文件 import 了内部 API（`BaseAcpPersona`），跨大版本可能失效 | 按新版本源码调整；先跑 §7.1 的探针 |
 | 换 root_dir 后 persona 消失 | `.jupyter/personas/` 是按 root_dir 查找的（§4） | 在新根目录再放一份 |
 | `jupyter_ai | extension failed loading ... _load_jupyter_server_extension function was not found` | **正常现象**，jupyter_ai 3.x 是纯元包 | 忽略 |
@@ -759,9 +480,10 @@ SelectorEventLoop cannot spawn subprocesses; using the thread-based pipe shim to
 症状 → 动作
 ------------------------------------------------------------------
 两个图标 / /api/ai/chats 404        → §2  删 @jupyter-ai/core
-没有 Agent 选项                      → §3 PATH、§4 目录位置、§6 写 persona
+没有 Agent 选项                      → §4 目录位置、§6 同步 persona
 NotImplementedError: （空消息）       → §5  SelectorEventLoop，§6 垫片
-FileNotFoundError WinError 2         → §3.1 PATH 顺序
+FileNotFoundError WinError 2         → §3.1  which 是 .CMD? 同步带解析器的 persona
+  └ opencode 升级后复发               → §3.1  exe 搬家了，看 §8 对应行
 OpenCode isn't configured yet        → §3.3 opencode auth
 persona 写了但没出现                  → §4 目录位置 + 重启 JupyterLab 进程
 ```

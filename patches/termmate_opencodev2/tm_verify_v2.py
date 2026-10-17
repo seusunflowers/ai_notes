@@ -9,8 +9,10 @@ Run:
     python tm_verify_v2.py
 
 Environment overrides:
+    TM_PKG         dir holding opencode_agent.py
+                   (default: the unpacked package's genfoundry dir)
     TM_MODEL       target model   (default deepseek/deepseek-flash)
-    TM_FAIL_MODEL  failing model  (default opencode/cat-jam-free)
+    TM_FAIL_MODEL  failing model  (default ollama/llama3:8b)
     TM_CLI         opencode CLI   (default %APPDATA% npm opencode.cmd)
 """
 import asyncio
@@ -28,14 +30,14 @@ HOME = os.path.expanduser("~")
 TEMP_ROOT = os.environ.get("TEMP") or os.path.join(HOME, "AppData", "Local", "Temp")
 APP_DATA = os.environ.get("APPDATA") or os.path.join(HOME, "AppData", "Roaming")
 WORK = os.path.join(TEMP_ROOT, "opencode")
-ADAPTER_DIR = os.path.join(  # unpacked package (manual section 7)
+ADAPTER_DIR = os.environ.get("TM_PKG") or os.path.join(  # unpacked package (manual section 7)
     APP_DATA, "Sublime Text", "Packages", "TermMate", "genfoundry",
 )
 PKG_DIR = os.path.join(WORK, "tm_verify_pkg")
 PROJECT = os.path.join(WORK, "tm_project")
 CLI = os.environ.get("TM_CLI") or os.path.join(APP_DATA, "npm", "opencode.cmd")
 MODEL = os.environ.get("TM_MODEL") or "deepseek/deepseek-flash"
-FAIL_MODEL = os.environ.get("TM_FAIL_MODEL") or "opencode/cat-jam-free"
+FAIL_MODEL = os.environ.get("TM_FAIL_MODEL") or "ollama/llama3:8b"
 
 START = time.time()
 RESULTS = []
@@ -213,11 +215,53 @@ async def main():
             record("interrupt-ok", True)
         except Exception as error:  # noqa: BLE001
             record("interrupt-ok", False, repr(error))
+
+        # rewind must actually truncate.  On opencode 2.0.32 DELETE /revert
+        # returns 204 and changes nothing, so "the call returned" is not a
+        # sufficient assertion -- count the messages before and after.
+        # GET /session/{id}/message answers {"data": [entry, ...], "cursor": ...}
+        # with newest-first flat entries carrying their own "id"/"type".
+        async def messages():
+            try:
+                data = await asyncio.wait_for(
+                    agent._http("GET", f"/session/{agent._session_id}/message"), 30
+                )
+            except Exception as error:  # noqa: BLE001
+                log(f"message listing failed: {error!r}")
+                return []
+            if isinstance(data, dict):  # unwrap the v2 envelope
+                data = data.get("data") or []
+            out = []
+            for entry in data or []:
+                if isinstance(entry, dict) and entry.get("id"):
+                    out.append((str(entry["id"]), str(entry.get("type") or "")))
+            return out
+
+        before = await messages()
+        # Newest first: rewind to the oldest user message.  TermMate's rewind
+        # button truncates from that prompt onward and puts its text back in
+        # the input box, so the target itself must be gone afterwards while the
+        # older entries survive unchanged.
+        oldest_first = list(reversed(before))
+        target_idx = next(
+            (i for i, (_, kind) in enumerate(oldest_first) if kind == "user"),
+            None,
+        )
+        target = oldest_first[target_idx][0] if target_idx is not None else None
+        expect = [mid for mid, _ in before[len(before) - target_idx:]] \
+            if target_idx is not None else []
         try:
-            await asyncio.wait_for(agent.rewind("msg_dummy"), 15)
+            await asyncio.wait_for(agent.rewind(target or "msg_dummy"), 20)
             record("rewind-ok", True)
         except Exception as error:  # noqa: BLE001
             record("rewind-ok", False, repr(error))
+        after = await messages()
+        after_ids = [mid for mid, _ in after]
+        record("rewind-had-messages", len(before) >= 3, f"before={len(before)}")
+        record("rewind-drops-target", bool(target) and target not in after_ids,
+               f"target={target}")
+        record("rewind-trims-exactly", after_ids == expect,
+               f"{len(before)}->{len(after)} expect={len(expect)}")
 
         # ---- synchronous session picker ----------------------------------
         try:

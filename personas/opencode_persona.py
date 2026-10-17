@@ -1,6 +1,6 @@
 r"""Local Jupyter AI persona: OpenCode (ACP), with Windows workarounds.
 
-Two upstream problems are worked around here:
+Three upstream problems are worked around here:
 
 1. Version gate. The `@jupyter-ai/acp-client` package ships an `opencode-acp`
    persona that refuses to load unless the `opencode` CLI is >=1.0.0,<2. That
@@ -8,7 +8,18 @@ Two upstream problems are worked around here:
    Windows for *any* version, because the npm shim is `opencode.cmd`, a batch
    file that `CreateProcess` cannot launch.
 
-2. Subprocess spawning. `jupyter_server` forces
+2. Executable resolution. `CreateProcess` only ever appends `.exe`, so a bare
+   `"opencode"` argument resolves to the npm `.cmd` shim and dies with
+   `FileNotFoundError: [WinError 2]`. Fixing PATH order is unreliable on
+   Windows -- the effective PATH is (Machine PATH ; User PATH), so an nvm4w /
+   Program Files node install beats anything prepended to the User PATH, and
+   every opencode upgrade can move the binary again. `resolve_opencode_executable`
+   therefore finds the real `opencode.exe` itself: explicit env override, then
+   every npm global prefix (asked from `npm config get prefix`, plus `%APPDATA%\npm`
+   and PATH entries), then the path embedded in the `.cmd` shim text, then any
+   PATH directory that literally holds `opencode.exe`. Newest install wins.
+
+3. Subprocess spawning. `jupyter_server` forces
    `asyncio.WindowsSelectorEventLoopPolicy` on Windows (serverapp.py,
    `_init_asyncio_patch`), and a `SelectorEventLoop` cannot create subprocesses
    or connect pipes at all -- it raises a bare `NotImplementedError`. This makes
@@ -22,10 +33,12 @@ directory (NOT from `~/.jupyter/personas/` -- Jupyter AI only looks inside the
 JupyterLab root dir and its subdirectories).
 
 Prerequisites:
-  * opencode CLI installed and on PATH
-  * the folder holding the real `opencode.exe`
-    (`%APPDATA%\npm\node_modules\@opencode\cli\bin`) must come BEFORE
-    `%APPDATA%\npm` in PATH, otherwise only the .cmd shim is found and spawning fails.
+  * opencode CLI installed somewhere npm can see it. The persona locates the
+    real `opencode.exe` itself (see `resolve_opencode_executable`), so PATH
+    order does not matter -- which matters because Windows builds the effective
+    PATH as (Machine PATH ; User PATH) and an nvm4w / Program Files node
+    install always wins over anything prepended to the User PATH.
+    Optional overrides: `OPENCODE_ACP_EXE`, `OPENCODE_NPM_PREFIX`.
   * Run `opencode auth` once, or export your provider's API key, before
     starting JupyterLab.
 """
@@ -34,6 +47,8 @@ import asyncio
 import os
 import platform
 import queue
+import re
+import shutil
 import subprocess
 import threading
 from pathlib import Path
@@ -47,10 +62,141 @@ from jupyter_ai_acp_client.base_acp_persona import BaseAcpPersona
 _STREAM_LIMIT = 50 * 1024 * 1024
 _WRITE_HIGH_WATER = 4 * 1024 * 1024
 
+# Only `.exe`/`.com` can be launched by CreateProcess. npm's shims are
+# `.cmd`/`.ps1`/extensionless shell scripts, which is what makes a naive
+# `create_subprocess_exec("opencode", ...)` raise
+# `FileNotFoundError: [WinError 2]`.
+_SPAWNABLE_EXTS = (".exe", ".com")
+
 
 def _needs_pipe_shim(loop: asyncio.AbstractEventLoop) -> bool:
     """True when this loop cannot spawn subprocesses / connect pipes."""
     return platform.system() == "Windows" and isinstance(loop, asyncio.SelectorEventLoop)
+
+
+# --------------------------------------------------------------------------
+# Locating the real opencode.exe
+# --------------------------------------------------------------------------
+#
+# PATH order is NOT a reliable fix here, because Windows composes the effective
+# PATH as (Machine PATH ; User PATH). Once `npm config get prefix` points at a
+# directory that lives in the *Machine* PATH (e.g. nvm4w's `C:\nvm4w\nodejs`),
+# no amount of prepending inside the User PATH can win: the `.cmd` shim in the
+# Machine PATH dir is always found first. So resolve the binary ourselves.
+
+_EXE_NAME = "opencode.exe"
+_REL_BIN = ("node_modules", "@opencode", "cli", "bin", _EXE_NAME)
+_SHIM_EXE_RE = re.compile(r'"([^"\n]*opencode\.exe)"', re.IGNORECASE)
+
+
+def _npm_global_prefixes() -> list[Path]:
+    """Every plausible npm global prefix, newest-install-friendly order."""
+    prefixes: list[Path] = []
+
+    env_prefix = os.environ.get("OPENCODE_NPM_PREFIX")
+    if env_prefix:
+        prefixes.append(Path(env_prefix))
+
+    # Ask npm itself. `npm` is itself a .cmd shim, so it needs cmd.exe.
+    for launcher in (["cmd", "/c", "npm", "config", "get", "prefix"],):
+        try:
+            done = subprocess.run(  # noqa: S603
+                launcher,
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        reported = (done.stdout or "").strip().splitlines()
+        if done.returncode == 0 and reported:
+            prefixes.append(Path(reported[-1].strip()))
+
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        prefixes.append(Path(appdata) / "npm")
+
+    prefixes += [Path(p) for p in (os.environ.get("PATH") or "").split(os.pathsep) if p]
+    prefixes += [
+        Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "nodejs",
+        Path(os.environ.get("LOCALAPPDATA", "")) / "npm",
+    ]
+
+    seen: set[str] = set()
+    ordered: list[Path] = []
+    for prefix in prefixes:
+        key = str(prefix).lower().rstrip("\\/")
+        if key and key not in seen:
+            seen.add(key)
+            ordered.append(prefix)
+    return ordered
+
+
+def _exes_under(prefix: Path) -> list[Path]:
+    exe = prefix.joinpath(*_REL_BIN)
+    return [exe] if exe.is_file() else []
+
+
+def _exes_on_path() -> list[Path]:
+    """opencode.exe sitting directly in a PATH directory."""
+    found: list[Path] = []
+    for entry in (os.environ.get("PATH") or "").split(os.pathsep):
+        if not entry:
+            continue
+        for ext in _SPAWNABLE_EXTS:
+            candidate = Path(entry) / ("opencode" + ext)
+            if candidate.is_file():
+                found.append(candidate)
+    return found
+
+
+def _exe_from_shim() -> list[Path]:
+    """Dig the real .exe path out of the npm .cmd shim text."""
+    shim = shutil.which("opencode")
+    if not shim or shim.lower().endswith(_SPAWNABLE_EXTS):
+        return []
+    try:
+        text = Path(shim).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    out: list[Path] = []
+    for match in _SHIM_EXE_RE.finditer(text):
+        raw = match.group(1).replace("\\", " ").split(" ")[0].replace("/", "\\")
+        candidate = Path(raw)
+        if not candidate.is_absolute():
+            candidate = Path(shim).parent / candidate
+        if candidate.is_file():
+            out.append(candidate)
+    return out
+
+
+def resolve_opencode_executable() -> str:
+    """Absolute path to a CreateProcess-launchable `opencode.exe`.
+
+    Falls back to the bare name so the original FileNotFoundError surfaces
+    if nothing at all can be found.
+    """
+    override = os.environ.get("OPENCODE_ACP_EXE")
+    if override and Path(override).is_file():
+        return override
+
+    candidates: list[Path] = []
+    for prefix in _npm_global_prefixes():
+        candidates.extend(_exes_under(prefix))
+    candidates.extend(_exe_from_shim())
+    candidates.extend(_exes_on_path())
+
+    # Newest install first, so a stale leftover copy never wins.
+    def _mtime(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    unique = {str(p).lower(): p for p in candidates if p.is_file()}
+    ranked = sorted(unique.values(), key=_mtime, reverse=True)
+    return str(ranked[0]) if ranked else "opencode"
 
 
 # --------------------------------------------------------------------------
@@ -286,6 +432,20 @@ class OpenCodePersona(BaseAcpPersona):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, executable=["opencode", "acp"], **kwargs)
 
+    async def _resolve_executable(self) -> list[str]:
+        """Resolve `opencode acp` to an absolute, spawnable command line."""
+        loop = asyncio.get_running_loop()
+        resolved = await loop.run_in_executor(None, resolve_opencode_executable)
+        command = [resolved, "acp"]
+        if command != self._executable:
+            self.log.info(
+                "[OpenCode] Resolved ACP agent command: %s (PATH lookup gave %r).",
+                command[0],
+                shutil.which("opencode"),
+            )
+        self._executable = command
+        return command
+
     @property
     def defaults(self) -> PersonaDefaults:
         return PersonaDefaults(
@@ -301,6 +461,9 @@ class OpenCodePersona(BaseAcpPersona):
     async def _init_agent_subprocess(self):
         env: dict[str, str] | None = None
 
+        # Never rely on PATH: see resolve_opencode_executable().
+        command = await self._resolve_executable()
+
         # Ask OpenCode to confirm edits / shell commands before running them.
         if "OPENCODE_CONFIG" not in os.environ and not _has_user_config():
             env = os.environ.copy()
@@ -311,10 +474,13 @@ class OpenCodePersona(BaseAcpPersona):
             self.log.info(
                 "SelectorEventLoop cannot spawn subprocesses; using the "
                 "thread-based pipe shim to launch '%s'.",
-                " ".join(self._executable),
+                " ".join(command),
             )
-            return await _spawn_process(list(self._executable), env)
+            return await _spawn_process(command, env)
 
+        # Bypass super() only to keep `limit`/`start_new_session` parity:
+        # it reads self._executable, which we have just refreshed anyway.
+        self._executable = command
         return await super()._init_agent_subprocess(env=env)
 
     async def is_authed(self) -> bool:
