@@ -83,6 +83,9 @@
   要逐字节一致请加 `-c core.autocrlf=false`。`tm_patch.py` 不受影响——它按输入文件的行尾风格回写
   （LF 进、LF 出；CRLF 进、CRLF 出）。
 - Package Control 的 TermMate 更新会覆盖补丁（手册 §11/§12）——更新后重跑本目录流程即可恢复。
+- **重跑 `tm_patch.py` 覆盖 `opencode_agent.py` 时，如果 Sublime Text 还在运行**：插件重载会随着 Job Object 一起结束每个会话自己的
+  `opencode serve`，已打开的会话随后只会报 `WinError 10061`。先打补丁再重启，或事后用 `TermMate: Clear Session` 重置会话
+  （手册 §9.6；本机 2026-10-17 实际踩到过一次）。
 - `tm_probe_v2.py` 是当初用来重新探测 v2 线路格式的一次性脚本，保留作参考；`logs/tm_probe_v2.out.txt`
   是 **2.0.30** 那次的探测记录（未随本轮刷新）。无参数直接运行即可，退出时自动清理自己启动的服务进程。
 - 本机被移出加载路径的档案是 0.6.1：`%TEMP%\TermMate.sublime-package.disabled.061`（506,001 字节，

@@ -1041,6 +1041,10 @@ Copy-Item "$env:APPDATA\Sublime Text\Packages\TermMate\genfoundry\opencode_agent
 
 **Restart Sublime Text after moving the archive** — otherwise the already-loaded
 plugin host keeps the old module and you will debug a fix that is not running.
+For the same reason, do not overwrite `opencode_agent.py` under a running Sublime
+and then keep talking in an open chat: the plugin reload also takes the job object
+that owns every chat's `opencode serve`, so the chats are orphaned and fail with
+`WinError 10061` until they are reset (§9.6).
 
 > This arrangement is temporary by design. Any Package Control update restores
 > the archive and reverts the patch. Keep the `.orig` backup and be prepared to
@@ -1240,6 +1244,56 @@ Honest accounting — these were deliberately **not** fixed:
 5. **Unreachable providers hang the turn indefinitely** (see the
    `session.retry.scheduled` note in §5). Stop is the only escape.
 
+6. **A chat never recovers once its own `opencode serve` dies.** Each chat owns
+   exactly one server process (spawned in `connect()`); the adapter then latches
+   `server_url` and every request is a plain `urlopen` against it. Only the
+   **SSE** thread retries — it backoff-reconnects forever (§6.6) — while the
+   request path has no recovery at all: `_http_sync` turns a refused connection
+   into `OpenCodeHTTPError(method, url, None, str(error.reason))`, which
+   `send_message` reports in the chat as
+
+   ```
+   Error: OpenCode POST http://127.0.0.1:<port>/api/session/<sid>/prompt?directory=…:
+   [WinError 10061] 由于目标计算机积极拒绝，无法连接。
+   ```
+
+   Every later prompt fails identically, so the chat looks bricked. And because
+   Windows reuses freshly freed ephemeral ports, the port in that message can be
+   owned by a **healthy** server a minute later — which makes a stale message look
+   live.
+
+   **Remedy:** `TermMate: Clear Session`, or restart Sublime Text. Nothing is
+   lost — sessions and messages live in a shared store
+   (`~/.local/share/opencode/opencode.db`, tables `session_v2` /
+   `session_message`), so the rebuilt server serves the same session id.
+
+   **Most likely trigger: overwriting the adapter while Sublime is running.**
+   The changed `.py` makes Sublime reload the plugin, the reload takes the plugin
+   host's job object (`KILL_ON_JOB_CLOSE`, §6.9/§7) with it, every chat's server
+   dies, and an open chat is left holding a dead URL. Patch, *then* restart (§7)
+   — or reset the chat afterwards.
+
+   **Do not mistake it for a reverted patch (§11)** — the string is identical.
+   From a shell, with the port from the error message:
+
+   ```powershell
+   $port = 56026                    # the port the error message names
+   Get-NetTCPConnection -LocalPort  $port | ft State,LocalAddress,OwningProcess
+   Get-NetTCPConnection -RemotePort $port | ft State,OwningProcess
+   ```
+
+   `Listen` owned by `opencode.exe` **plus** `Established` owned by
+   `plugin_host-*.exe` means that chat's server is alive *and* authenticated —
+   the error text is a retained chat message, so just resend the prompt. Nothing
+   listening, or a stock adapter, is the §11 case.
+
+   **Did the prompt ever land?** Every turn is recorded, so a prompt that never
+   reached the server leaves no trace:
+
+   ```powershell
+   python -c "import sqlite3,os,datetime as d; db=os.path.expanduser('~/.local/share/opencode/opencode.db'); c=sqlite3.connect('file:%s?mode=ro'%db.replace('\\','/'),uri=True); [print(r[0], d.datetime.fromtimestamp(r[1]/1000), r[2]) for r in c.execute('select id,time_updated,directory from session_v2 order by time_updated desc limit 5')]"
+   ```
+
 ---
 
 ## 10. Gotchas checklist
@@ -1265,6 +1319,11 @@ Honest accounting — these were deliberately **not** fixed:
 - [ ] Set `"log_level": "DEBUG"` in TermMate settings and watch the ST console
       (`Ctrl+\``) when a failure is not reproducible outside ST.
 - [ ] Capture the server PID **before** `disconnect()` when asserting no orphans.
+- [ ] A mid-chat `WinError 10061` is **not** proof of a broken patch: check the
+      port (§9.6) before re-patching — the chat's server may simply be dead, and
+      `TermMate: Clear Session` is the fix.
+- [ ] Do not overwrite `opencode_agent.py` while Sublime is running; the plugin
+      reload kills every chat's server (§9.6). Patch → restart → talk.
 
 ---
 
@@ -1316,7 +1375,9 @@ from 0.5.8 to 0.6.0 on 2026-10-14 14:16 did exactly this, deleting the unpacked
 `Packages\TermMate\` directory and restoring `TermMate.sublime-package`. Symptom
 was a fresh `WinError 10061` on `GET /global/health` — *connection refused*, not
 the §1 `TimeoutError`, because the stale adapter had latched a URL and the server
-was already gone. Verify upstream with:
+was already gone. That same string also appears when only the *chat's* server died
+while the patch is intact — tell the two apart before re-patching (§9.6). Verify
+upstream with:
 
 ```powershell
 $raw = "https://raw.githubusercontent.com/flashmodel/termmate/main/genfoundry/opencode_agent.py"
@@ -1566,6 +1627,24 @@ the new shape.
 Everything in §9, minus §9.2 (rewind granularity, now fixed by D1). The
 unreachable-provider hang (§9.5) and the empty changed-files panel (§9.1) are
 server behaviour, not adapter bugs — do not "fix" them with invented timeouts.
+§9.6 (a chat whose server died never recovers) is documented rather than fixed on
+purpose: the remedy is `TermMate: Clear Session`, and auto-recovery on the request
+path would risk replaying a prompt that did land.
+
+**§9.6 was hit for real here (2026-10-17, reported on 10-18).** A chat in
+`C:\Peng\code\TrafficNetwork\matsim-example-project\src\mycode` (session
+`ses_eb5f8f1a…`) completed its last turn at **21:40:24**; the next prompt returned
+`Error: OpenCode POST http://127.0.0.1:56026/api/session/ses_eb5f8f1a…/prompt?directory=…:
+[WinError 10061] 由于目标计算机积极拒绝，无法连接。` The failure window brackets the
+adapter overwrite at **21:42:27**, and the plugin reload that write triggers is
+the most likely cause. By the time it was investigated the restarted Sublime
+(21:52:11) owned a fresh server on the *same* port 56026, running in that chat's
+own directory, with `plugin_host-3.14.exe` holding an established authenticated
+SSE link to it — so the port in the error text pointed at a healthy server while
+the message stayed on screen. Nothing had landed (`session_v2.time_updated` still
+21:40:24, no assistant reply), and re-sending the prompt is the fix; re-patching
+would have been wasted work, since the installed adapter still hashed to
+`D5425D81…28BBFF`.
 
 **And the patch is still upstream-brittle:** Package Control auto-upgrade was left
 enabled on this machine, so the next TermMate release will restore the archive and
