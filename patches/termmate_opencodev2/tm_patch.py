@@ -9,6 +9,11 @@ the unpacked archive (manual section 7).  Edit `6.1-banner-regexes` is
 included, so the old "apply section 6.1 by hand first" prerequisite is gone;
 running against a file that already has 6.1 applied is a safe SKIP.
 
+`compress-permission` allows the DCP `compress` tool explicitly.  The overlay
+sets `{"*": "ask"}` for every tool, and OpenCode cannot prompt for plugin
+tools, so without that rule the plugin refuses to compress (verified on
+opencode 2.1.0).
+
 Rewind (`rewind-v2`) targets the opencode 2.0.32 wire format: the staged
 `POST .../revert/stage` + `POST .../revert/commit` pair, which preserves
 message granularity.  On 2.0.32 `DELETE /revert` is a silent no-op, so it is
@@ -740,6 +745,25 @@ def _is_v2_banner(line: str) -> bool:
                         turns.append(current)
                     current = {"prompt": text, "response": None}
                 elif role == "assistant" and text and current is not None:'''),
+
+    # The overlay sets permission {"*": "ask"} for every tool name. OpenCode has
+    # no prompt flow for plugin tools, so that rule silently disables DCP's
+    # compress tool; allow it explicitly (also DCP's own default).
+    ("compress-permission", r'''        approve_mode = self.options.approve_mode or "allow-edit"
+        if approve_mode in ("allow-edit", "accept-all"):
+            # OpenCode groups Edit, Write, ApplyPatch, and Patch under the
+            # single `edit` permission key.
+            permission["edit"] = "allow"
+''', r'''        approve_mode = self.options.approve_mode or "allow-edit"
+        if approve_mode in ("allow-edit", "accept-all"):
+            # OpenCode groups Edit, Write, ApplyPatch, and Patch under the
+            # single `edit` permission key.
+            permission["edit"] = "allow"
+
+        # Compress is a plugin tool: OpenCode cannot prompt for it, so the
+        # "*": "ask" default above would disable it outright.
+        permission["compress"] = "allow"
+'''),
 ]
 
 

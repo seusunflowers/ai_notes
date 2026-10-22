@@ -6,16 +6,34 @@
 
 ## 验证记录
 
-- 日期：2026-10-17
+- 日期：2026-10-20（第四轮，opencode CLI **2.1.0**）
+- 环境：opencode CLI **2.1.0**（CLI 自行升级，上一轮记录的 2.0.32 已过期）、Sublime Text 4 build 4215（插件宿主 Python 3.14）、
+  TermMate **0.6.1**（适配器锚点未变，30 个 edit 全部 `OK`，零 fuzz）
+- 验证模型：`deepseek/deepseek-flash`；失败路径模型：`ollama/llama3:8b`
+- 验证结果：`tm_verify_v2.py` **32/32 PASS**（`logs/tm_verify_v2.out.txt` 已按本轮重跑覆盖）
+- 本轮唯一改动：新增 `compress-permission`（第 30 个 edit），见下节
+- 最终生效的适配器快照：`backups/opencode_agent.py.patched.verified`（LF 84,530 字节，`1ACD5B4C…C149`），与本机
+  `%APPDATA%\Sublime Text\Packages\TermMate\genfoundry\opencode_agent.py` 逐字节一致
+
+- 日期：2026-10-17（第三轮，opencode CLI **2.0.32**）
 - 环境：opencode CLI **2.0.32**（Windows npm 安装，本机在 `C:\nvm4w\...\opencode.exe`）、Sublime Text 4 build 4215（插件宿主 Python 3.14）、TermMate **0.6.1**
 - 验证模型：`deepseek/deepseek-flash`（另用 `deepseek/deepseek-v4-pro` 复核过模型选择与 thinking 事件）；失败路径模型：`ollama/llama3:8b`
-- 验证结果：`tm_verify_v2.py` **32/32 PASS**（见 `logs/tm_verify_v2.out.txt`）
+- 验证结果：`tm_verify_v2.py` **32/32 PASS**
 - 交叉复核：上一轮的独立脚本 `%TEMP%\tm_verify_2032.py`（26 条断言，含真实 reasoning 事件与合成 `session.tool.failed`）
   对同一文件同样 **26/26 PASS**
-- 最终生效的适配器快照：`backups/opencode_agent.py.patched.verified`（LF 84,351 字节，`D5425D81…28BBFF`），与本机
-  `%APPDATA%\Sublime Text\Packages\TermMate\genfoundry\opencode_agent.py` 逐字节一致
-- 上一轮记录（保留作对照）：2026-10-16，opencode **2.0.30**，**29/29 PASS**。那一版快照的 `rewind()` 走
+- 那一轮的适配器快照（已被本轮覆盖）：LF 84,351 字节，`D5425D81…28BBFF`
+- 再上一轮（保留作对照）：2026-10-16，opencode **2.0.30**，**29/29 PASS**。那一版快照的 `rewind()` 走
   `DELETE /revert`，在 2.0.32 上已失效
+
+### 相对 2.0.32 的改动：compress 权限
+
+适配器给 `OPENCODE_CONFIG_CONTENT` 里的 `permission` 默认写 `{"*": "ask"}`，再把允许的工具逐个置 `allow`。
+`compress` 是 **DCP 插件**注册的工具，OpenCode V2 的插件 API 还不能为它弹确认框，于是这条 `ask` 规则等于直接禁用：
+模型调用时报 `DCP: compress permission 'ask' is not supported by OpenCode V2's public plugin API yet. Compression was not performed.`
+（表现为"压缩工具在这个环境不可用（权限限制）"，`~/.local/share/opencode/storage/plugin/dcp/<session>.json` 里一次压缩记录都没有）。
+
+修法是显式允许：`permission["compress"] = "allow"`（也是 DCP 自己的默认值），不依赖 `approve_mode`。
+真机复现与修复都已验证：同一份 `OPENCODE_CONFIG_CONTENT`，改动前该工具 `status: error`、改动后 `status: completed`。
 
 ### 相对 2.0.30 的两处改动
 
@@ -34,15 +52,15 @@
 
 | 文件 | 大小 (B) | SHA-256 |
 |---|---|---|
-| `tm_patch.py` | 32153 | `10DC9DB2981826CD6F9A2DFE543CBC6B9549709A4E761730359FF8FC44F7F824` |
+| `tm_patch.py` | 33410 | `257DC76247C617378DB7077BE10703E8BAC403A3CE76C2DC25EA09A50A8BA890` |
 | `tm_verify_v2.py` | 14037 | `E7CE008E646479BE633B20164877B9B12DA52DEBB6467C9441D17E8DC3500ACE` |
 | `tm_probe_v2.py` | 11811 | `DF2B2F83537F5DF0CC7EA35C44FE1D09A3833755BBBBBC1F4175A0FB3A370500` |
 | `check_syntax.py` | 128 | `CFCF76AE01E095347508A5043E838AFA2DA6F4C7EB6D3A3A18B5CC8F67B993DC` |
 | `logs/tm_probe_v2.out.txt` | 25361 | `CC55688B9E6109F6AF9758B76F2347F37110EECB9229FB65652C5C0A4D23A559` |
-| `logs/tm_verify_v2.out.txt` | 3346 | `7EAC5D66911968AB90F7DBBB5486AEBDDBB9A6C803A97C6D7EEC4C2B58B81B09` |
+| `logs/tm_verify_v2.out.txt` | 4767 | `C199A91194EB017AFCC84B7EAC80D164CB10F57B76F862FCC85F4614511F2174` |
 | `backups/opencode_agent.py.orig.060` | 67773 | `00F1849755503CB560361DEB3C406F4C86AD9F801448AB24F67808D8D24A2F10` |
 | `backups/opencode_agent.py.pre_script.bak` | 68081 | `11EF79EA0B074359AFDEC328EC01F311940AFC8B306A3D0BFDE51E2612D45C19` |
-| `backups/opencode_agent.py.patched.verified` | 84351 | `D5425D817BDED7C52BC638B68945234DE0A2B9DC92788712A4827DB1E428BBFF` |
+| `backups/opencode_agent.py.patched.verified` | 84530 | `1ACD5B4C006369EA0D97D769B5016CD7907D258C46606C3F63610CFE93C4C149` |
 | `backups/TermMate.sublime-package.disabled.060` | 505751 | `5F2D8F67ACEEC22FDCBDCF9118D73FF5F3D99B2624ED76163B5ADB94D6C426AE` |
 
 ## 使用方法
@@ -67,7 +85,7 @@
 4. **还原**：用 `backups\` 覆盖对应位置——
    - `orig.060` = 上游原始适配器（0.6.0 与 0.6.1 的 `opencode_agent.py` 逐字节相同，故这一个备份两版通用）；
    - `pre_script.bak` = 原始 + 手册 §6.1 手工小改（历史遗留，现在只作对照，不再是脚本的必需输入）；
-   - `patched.verified` = 本目录脚本产出的已验证状态（v2.0.32）。
+   - `patched.verified` = 本目录脚本产出的已验证状态（opencode 2.1.0，含 compress 权限）。
 
 ## 注意
 
@@ -75,8 +93,9 @@
   `TM_FAIL_MODEL` 覆盖；跨机器无需改代码。
 - 日志已脱敏：本机路径替换为 `%TEMP%` / `%APPDATA%` / `%HOME%` / `%OPENCODE_CLI%` 占位符，墙钟时间替换为 `%TODAY%`；
   一次性服务口令只记录"是否捕获到"（`password_captured=True`），不记录口令本身。
-- `tm_patch.py` 的 29 个 edit 里**包含 §6.1**（横幅正则 + `_SERVER_PASSWORD_RE` / `_is_v2_banner`）。旧版把这一步留给手工，
+- `tm_patch.py` 的 30 个 edit 里**包含 §6.1**（横幅正则 + `_SERVER_PASSWORD_RE` / `_is_v2_banner`）。旧版把这一步留给手工，
   于是"解包后直接跑脚本"会漏掉 §6.1，产出的文件里 `_SERVER_PASSWORD_RE` 只有引用没有定义。
+- 第 30 个 edit（`compress-permission`）是为了让 DCP 的 `compress` 工具能用：插件工具没有确认流程，`*: ask` 会把它禁用。
 - `tm_patch.py` 修复过一处幂等缺陷：旧版对已补丁文件重复执行会把 4 个"插入式"修改重复应用（方法重复定义）。
   现版本重复执行是安全的 no-op。
 - 本仓库 `core.autocrlf=true`：用 `git apply` 打上面的补丁时，git 会把结果改写成 CRLF（内容对、哈希不对），

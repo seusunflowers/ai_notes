@@ -398,6 +398,10 @@ class OpenCodeAgent(BaseAgent):
             # single `edit` permission key.
             permission["edit"] = "allow"
 
+        # Compress is a plugin tool: OpenCode cannot prompt for it, so the
+        # "*": "ask" default above would disable it outright.
+        permission["compress"] = "allow"
+
         if self.options.add_dirs:
             permission["external_directory"] = {
                 os.path.join(os.path.abspath(path), "**"): "allow"

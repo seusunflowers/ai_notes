@@ -9,7 +9,8 @@
 ai_notes/
 ├── docs/        排障与安装手册，面向 agent 编写
 │   ├── JUPYTER_AI_OPENCODE_WINDOWS.md
-│   └── SUBLIME_TEXT_TERMMATE_OPENCODEV2_SUPPORT.md
+│   ├── SUBLIME_TEXT_TERMMATE_OPENCODEV2_SUPPORT.md
+│   └── NSFC_KEY_INTERNATIONAL_COOPERATION.md
 ├── patches/     配套手册的可重复执行修复脚本与回滚备份
 │   └── termmate_opencodev2/
 └── personas/    可直接复制的配置片段（规范源）
@@ -22,6 +23,7 @@ ai_notes/
 |---|---|
 | `JUPYTER_AI_OPENCODE_WINDOWS.md` | Windows 上安装 JupyterLab / Jupyter AI，并把 OpenCode、Claude、Codex 等 ACP Agent 接成聊天后端 |
 | `SUBLIME_TEXT_TERMMATE_OPENCODEV2_SUPPORT.md` | Sublime Text 4 的 TermMate 包接不上 OpenCode v2：模型列表为空、无输出。含 v1→v2 API 差异对照表、事件映射、补丁代码、不依赖 Sublime 的验证脚本，以及覆盖归档的安装与回滚步骤 |
+| `NSFC_KEY_INTERNATIONAL_COOPERATION.md` | 国自然「重点国际（地区）合作研究项目」调研：哪些是单方申报/单方评审（不绑定合作国家），申请条件、材料、限项、资助强度与领域方向；以及各类单方性质国际专项。写申请书/选项目类型时查阅 |
 
 - `docs/` 里的手册遵循同一套结构：症状→根因对照表 → 环境探测命令 →
   按序修复步骤（命令可直接粘贴）→ 内联完整源码 → 不依赖服务的验证探针 →

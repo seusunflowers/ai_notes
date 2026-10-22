@@ -5,9 +5,9 @@ A reproducible guide for AI agents and humans who need to make the
 v2 CLI. Written from a real Windows repair; the analysis and the patch are
 platform-agnostic, and platform-specific differences are called out inline.
 
-**Status:** verified working end-to-end against `opencode v2.0.27` **and
-v2.0.32** (see [§14](#14-third-pass-opencode-v2032--termmate-061), which also
-carries the small v2.0.32 deltas to §6.6 and §6.9).
+**Status:** verified working end-to-end against `opencode v2.0.27`, **v2.0.32**
+and **v2.1.0** (the 2.0.32 pass is [§14](#14-third-pass-opencode-v2032--termmate-061);
+the 2.1.0 pass and the `compress` permission fix are [§15](#15-fourth-pass-opencode-v210-the-compress-permission)).
 **Scope:** `genfoundry/opencode_agent.py` only. No other TermMate file needed edits.
 
 > **Revision note (2nd pass, opencode v2.0.27).** The first version of this guide
@@ -26,6 +26,13 @@ carries the small v2.0.32 deltas to §6.6 and §6.9).
 > change on 2.0.32: `rewind()` must use the **staged** revert pair, not
 > `DELETE /revert`, and the failed-tool terminal event is `session.tool.failed`,
 > not `session.tool.error`. Both are marked **[v2.0.32]** inline.
+>
+> **Revision note (4th pass, opencode v2.1.0).** Re-measured on 2.1.0 after the
+> CLI upgraded itself: the §6 anchors still hold (30 edits, zero fuzz) and the
+> harness still reports 32/32. One new adapter bug was found and fixed — the
+> `compress` tool of the DCP plugin was disabled by the adapter's `{"*": "ask"}`
+> permission overlay ([§6.11](#611-compress-permission-plugin-tools),
+> [§15](#15-fourth-pass-opencode-v210-the-compress-permission)).
 
 ---
 
@@ -75,6 +82,13 @@ a different machine.
 > TermMate 0.6.1's `opencode_agent.py` is byte-identical to 0.5.8/0.6.0 (same
 > hash), so the §6 patch applied with **zero fuzz** and the only 2.0.32 deltas
 > are the two in [§14](#14-third-pass-opencode-v2032--termmate-061).
+>
+> **[v2.1.0]** Same machine, 2026-10-20: the CLI upgraded itself to
+> **`opencode 2.1.0`**. Same Sublime, same TermMate 0.6.1, same pristine hash —
+> the 30 edits still apply with zero fuzz and the harness still reports 32/32.
+> The only new work was the adapter's `compress` permission
+> ([§6.11](#611-compress-permission-plugin-tools),
+> [§15](#15-fourth-pass-opencode-v210-the-compress-permission)).
 
 
 ### TermMate's bundled agent adapters
@@ -137,9 +151,10 @@ CLIs' APIs and are untouched by the v2 rewrite.
 The §6 excerpts are the **reference** form of the fix — you do not type them. The
 maintained tooling is committed next to this guide at
 [`patches/termmate_opencodev2/`](../patches/termmate_opencodev2/README.md):
-`tm_patch.py` (29 idempotent anchor edits; §6.1 and the rewind D1 included),
-`tm_verify_v2.py` (32 assertions), `check_syntax.py`, plus `backups/` and `logs/`
-listed with their sizes and SHA-256.
+`tm_patch.py` (30 idempotent anchor edits; §6.1, the rewind D1 and the
+§6.11 compress permission included), `tm_verify_v2.py` (32 assertions),
+`check_syntax.py`, plus `backups/` and `logs/` listed with their sizes and
+SHA-256.
 
 ```powershell
 # 1. disable the archive and unpack it (rationale, macOS/Linux: §7)
@@ -171,7 +186,7 @@ Sublime's plugin host (§0.1): here `python` resolves to
 
 **Expected end state:** `genfoundry\opencode_agent.py` byte-identical to
 `patches/termmate_opencodev2/backups/opencode_agent.py.patched.verified` — `SHA256
-D5425D817BDED7C52BC638B68945234DE0A2B9DC92788712A4827DB1E428BBFF`, 84 351 bytes
+1ACD5B4C006369EA0D97D769B5016CD7907D258C46606C3F63610CFE93C4C149`, 84 530 bytes
 (LF). Check the pristine hash first (it must still be `00F1849…A2F10`); if it is
 not, upstream changed and §6/§3 need re-reading before patching.
 
@@ -480,7 +495,7 @@ connection, drives everything.
 
 **Reference form only — do not hand-apply these.** `tm_patch.py` in
 [`patches/termmate_opencodev2/`](../patches/termmate_opencodev2/README.md)
-performs exactly these 29 substitutions idempotently; it covers §6.1–§6.10 plus
+performs exactly these 30 substitutions idempotently; it covers §6.1–§6.11 plus
 the §14.2 deltas, anchors on the pristine 0.6.x text, and so fails loudly
 instead of fuzzily when upstream moves. The excerpts below exist to explain
 *what* changed and to survive upstream drift — the one-line route is §0.2.
@@ -983,6 +998,61 @@ for entry in entries:
 `list_opencode_sessions()` needs **no** shape change — v2 sessions still expose
 `id`, `title` and `time.updated` — only the prefix and auth threading above.
 
+### 6.11 Compress permission (plugin tools)
+
+The adapter builds the whole `permission` map itself and starts it at
+`{"*": "ask"}`, so **every** tool name inherits `ask` — including tools that
+OpenCode does not own, like the `compress` tool that the DCP plugin registers.
+OpenCode V2 has no prompt flow for plugin tools yet, so DCP cannot ask; it
+refuses instead:
+
+```text
+DCP: compress permission 'ask' is not supported by OpenCode V2's public plugin API yet.
+Compression was not performed.
+```
+
+The model then reports "压缩工具不可用", and
+`~/.local/share/opencode/storage/plugin/dcp/<sessionID>.json` keeps a session
+with `blocks: []` — proof nothing was compressed. One line fixes it, and it must
+sit **outside** the `approve_mode` branch so it does not depend on that setting:
+
+```python
+        # Compress is a plugin tool: OpenCode cannot prompt for it, so the
+        # "*": "ask" default above would disable it outright.
+        permission["compress"] = "allow"
+```
+
+`"allow"` is also DCP's own default (`~/.config/opencode/dcp.jsonc` is empty
+here), so this only restores the behaviour a plain `opencode` session already
+has. Verified on 2.1.0 both ways: same `OPENCODE_CONFIG_CONTENT`, tool state
+`error` before, `completed` ("Compressed N messages…") after.
+
+### 6.11.1 Compressing on demand (from a TermMate chat)
+
+Yes, it is manual — type it as a prompt:
+
+| Prompt | Effect |
+|---|---|
+| `/dcp-compress` | DCP expands it into "run one compression pass"; the model calls `compress` and the history collapses into `[Compressed conversation section]`. Optional focus text: `/dcp-compress the earlier shell output` |
+| `/dcp` | **TUI only** — opens the DCP panel. TermMate is not the TUI, so nothing happens |
+
+Measured on 2.1.0 through the exact path TermMate uses
+(`POST /api/session/{id}/prompt` with the text `/dcp-compress`): the user message
+is stored verbatim, then the assistant turn contains a `compress` tool part with
+`status: completed` → `Compressed 2 messages into [Compressed conversation
+section].` Probe: `%TEMP%\tm_check\e2e_manual.py`. This needs edit 30 in place —
+with the `"*": "ask"` overlay the same prompt just returns the permission error.
+
+To make compression *only* manual (no autonomous nudges), set in
+`~/.config/opencode/dcp.jsonc`:
+
+```jsonc
+{ "manualMode": { "enabled": true, "automaticStrategies": true } }
+```
+
+Default here is `false`, i.e. DCP may compress on its own when the context
+approaches the limit; `/dcp-compress` works in both modes.
+
 ---
 
 ## 7. Installing the patch over Package Control
@@ -1028,7 +1098,7 @@ the target with `TM_TARGET` / `TM_BACKUP` on other machines. Two equivalents, if
 you prefer them:
 
 ```powershell
-# a) the same 29 edits as one applyable diff, from the unpacked package root.
+# a) the same 30 edits as one applyable diff, from the unpacked package root.
 #    -c core.autocrlf=false matters: this machine sets autocrlf=true, which
 #    rewrites the result to CRLF (content right, hash wrong).
 Set-Location "$env:APPDATA\Sublime Text\Packages\TermMate"
@@ -1324,6 +1394,9 @@ Honest accounting — these were deliberately **not** fixed:
       `TermMate: Clear Session` is the fix.
 - [ ] Do not overwrite `opencode_agent.py` while Sublime is running; the plugin
       reload kills every chat's server (§9.6). Patch → restart → talk.
+- [ ] Model says `compress`/compaction is "unavailable (permission)"? That is the
+      adapter's `{"*": "ask"}` overlay hitting a plugin tool — §6.11, already fixed
+      in edit 30. Re-patch, then restart or `TermMate: Clear Session`.
 
 ---
 
@@ -1335,7 +1408,7 @@ project sits on:
 
 | Package | Line | Latest at time of writing |
 |---|---|---|
-| `@opencode/cli` | **v2** (Go binary; what `opencode.ai/install` serves) | 2.0.x, stable since 2026-09-12; verified at **2.0.27** and re-verified at **2.0.32** |
+| `@opencode/cli` | **v2** (Go binary; what `opencode.ai/install` serves) | 2.0.x → **2.1.x**, stable since 2026-09-12; verified at **2.0.27**, **2.0.32** and **2.1.0** |
 | `opencode-ai` | **v1** (the Python-era CLI TermMate targets) | 1.18.x, still maintained; **not installed** on the verification machine |
 | `TermMate` | 0.5.8 → 0.6.1, released 2026-09-16 / 2026-10-16 | still ships the v1-only adapter; `opencode_agent.py` is byte-identical across 0.5.8/0.6.0/0.6.1 |
 | Sublime Text | 4 | verified at build **4215** (plugin host Python **3.14**) |
@@ -1428,7 +1501,7 @@ The same files, durably, are in
 |---|---|
 | `opencode_agent.py.orig.060` | stock upstream adapter (0.6.0 and 0.6.1 are byte-identical, so one file covers both) |
 | `opencode_agent.py.pre_script.bak` | upstream + §6.1 only — historical, the state the second pass started from |
-| `opencode_agent.py.patched.verified` | the known-good patched adapter (`D5425D81…28BBFF`, LF) — what §0.2 reproduces |
+| `opencode_agent.py.patched.verified` | the known-good patched adapter (`1ACD5B4C…C149`, LF) — what §0.2 reproduces |
 | `TermMate.sublime-package.disabled.060` | the 0.6.0 archive, if you need the whole package back |
 
 ---
@@ -1559,7 +1632,7 @@ New event names seen on 2.0.32 that the patch deliberately ignores:
 
 | File | What it is |
 |---|---|
-| `patches\termmate_opencodev2\tm_patch.py` | 29 anchor edits, idempotent, **§6.1 included** (the old "apply 6.1 by hand first" prerequisite is gone) and the staged-revert D1 |
+| `patches\termmate_opencodev2\tm_patch.py` | 30 anchor edits, idempotent, **§6.1 included** (the old "apply 6.1 by hand first" prerequisite is gone), the staged-revert D1 and the §6.11 compress permission |
 | `patches\termmate_opencodev2\tm_verify_v2.py` | the 32-assertion harness; the rewind checks count messages, so a `DELETE /revert` no-op fails |
 | `patches\termmate_opencodev2\check_syntax.py` | `ast.parse` wrapper — `python check_syntax.py <file>` |
 | `patches\termmate_opencodev2\backups\` | pristine / pre-script / verified adapters and the 0.6.0 archive (table in §12) |
@@ -1570,10 +1643,11 @@ New event names seen on 2.0.32 that the patch deliberately ignores:
 
 | File | What it is |
 |---|---|
-| `%TEMP%\termmate_v2_032.patch` | the same 29 edits as one applyable diff (regenerated with `tm_make_patch.py`; `tm_patch.py` is the durable form) |
+| `%TEMP%\termmate_v2_032.patch` | the same 30 edits as one applyable diff, 29 755 B (regenerated with `tm_make_patch.py`; `tm_patch.py` is the durable form) |
 | `%TEMP%\opencode_agent.py.orig.061` | pristine 0.6.1 adapter, as first extracted from the archive |
 | `%TEMP%\TermMate.sublime-package.disabled.061` | the archived 0.6.1 package, moved out of `Installed Packages\` |
 | `%TEMP%\tm_verify.py`, `%TEMP%\tm_verify_2032.py` | the earlier 19- and 26-assertion harnesses — the history behind §8/§13 |
+| `%TEMP%\tm_check\e2e_compress.py` | the §15 compress probe: spawns a throwaway `opencode serve` with and without `permission["compress"]` and prints the tool's `status`; takes `current` or `compress` as argv[1] |
 | `%TEMP%\tm_make_patch.py` | regenerates that patch from a pristine copy with the right relative paths |
 
 Install is §0.2 / §7 verbatim, with `061` names: unpack the archive into
@@ -1614,7 +1688,8 @@ harness, `deepseek/deepseek-flash`, `ollama/llama3:8b` for the failure path),
 running the package's `tm_patch.py` against the pristine 0.6.1 adapter — or
 against the older `pre_script.bak` (§6.1 already applied) — reproduces the
 installed file byte-for-byte (`SHA256 D5425D81…28BBFF`, LF). No orphaned
-`opencode.exe` after any run.
+`opencode.exe` after any run. (That 2.0.32 snapshot was later superseded by the
+§6.11 compress fix — §15 — which is why §0.2 now quotes `1ACD5B4C…C149`.)
 
 One wire-format correction found while upgrading the harness: `GET
 /api/session/{id}/message` on 2.0.32 returns a **flat** `{"data": [{id, type,
@@ -1644,7 +1719,48 @@ SSE link to it — so the port in the error text pointed at a healthy server whi
 the message stayed on screen. Nothing had landed (`session_v2.time_updated` still
 21:40:24, no assistant reply), and re-sending the prompt is the fix; re-patching
 would have been wasted work, since the installed adapter still hashed to
-`D5425D81…28BBFF`.
+`D5425D81…28BBFF` (the pre-§6.11 build of that day).
+
+---
+
+## 15. Fourth pass (opencode v2.1.0): the compress permission
+
+The CLI upgraded itself to **2.1.0** in the meantime (`opencode --version`; the
+2.0.32 binary is gone). Re-measured on 2.1.0, 2026-10-20:
+
+- The §6 anchors are unchanged — `tm_patch.py` applies all 30 edits with zero
+  fuzz to a freshly unpacked 0.6.1 adapter, and the resulting file passes
+  `tm_verify_v2.py` **32/32** (`logs/tm_verify_v2.out.txt`). Nothing in §5's
+  route/event mapping needed adjusting for 2.1.0 in this pass.
+- New bug, now fixed: **the `compress` tool of the DCP plugin was unusable inside
+  TermMate** — the model reported it as "unavailable (permission)". Root cause
+  and fix are §6.11; the adapter's blanket `{"*": "ask"}` overlay is what broke
+  it. Fix = edit 30, `permission["compress"] = "allow"`.
+- Proof, on 2.1.0, same `OPENCODE_CONFIG_CONTENT` both times (spawn a throwaway
+  `opencode serve`, two turns, ask the model to compress):
+
+  | overlay | tool result |
+  |---|---|
+  | `{"*": "ask", "edit": "allow"}` | `status: error` — `DCP: compress permission 'ask' is not supported by OpenCode V2's public plugin API yet.` |
+  | `+ "compress": "allow"` | `status: completed` — "Compressed 2 messages…" |
+
+  Why it happens: DCP resolves the permission with
+  `findLast(rule => matchesGlob("compress", rule.action))`, and the `"*"` rule
+  matches; OpenCode V2 cannot raise a permission prompt for a *plugin* tool, so
+  `ask` is a hard refusal rather than a question. Evidence on the machine:
+  `~/.local/share/opencode/storage/plugin/dcp/<sessionID>.json` for the affected
+  chat had `blocks: []` and zero compressions, while DCP itself was loaded and
+  recording nudges.
+
+**Updated artifacts:** `backups/opencode_agent.py.patched.verified` (LF 84 530 B,
+`1ACD5B4C…C149`), `logs/tm_verify_v2.out.txt`, the one-shot
+`%TEMP%\termmate_v2_032.patch` (29 755 B, 29 hunks) and
+`patches/termmate_opencodev2/README.md` all match the installed adapter.
+
+**Still open:** §9.1 (empty changed-files panel), §9.5 (unreachable-provider
+hang) and §9.6 (dead chat server) are unchanged on 2.1.0. The compress fix is
+adapter-side only, so it lives in `tm_patch.py` and survives re-patching; a
+TermMate update still wipes it along with the rest of the patch (§11/§12).
 
 **And the patch is still upstream-brittle:** Package Control auto-upgrade was left
 enabled on this machine, so the next TermMate release will restore the archive and
